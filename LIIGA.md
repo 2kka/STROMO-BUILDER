@@ -6,7 +6,8 @@ Säännöt: [liiga/saannot.json](liiga/saannot.json). Valinnat 3.11.2026, eivät
 
 | Vaihe | Mitä mitataan | Läpäisy |
 |---|---|---|
-| **Try out** | Yhden päivän tarkistus (rakenne, live = replay) | Tarkistus OK |
+| **Try out** | Yhden päivän tarkistus (rakenne, live = replay) | Tarkistus OK ja ≤ 200 hälytystä päivässä (vain räikeä ylitys; harvinaisuutta ei arvioida yhdestä päivästä) |
+| ↳ välitarkistus | Treenileirin ensimmäinen kolmannes 2025-11-01 – 2026-01-31 | **Saa vain pudottaa:** rypäitä < 17 (harvinainen), > 40 hälytystä/vrk (tiheä) tai reuna < −25/√rypäät pp (toivoton). Läpäisijät ajetaan koko jaksolle; päätös vain koko jakson tuloksesta. |
 | **Treenileiri** | Kehitysjakso 2025-11-01 – 2026-07-31, BTC-USDT, mittari 3A | ≥ 100 rypästä, reuna ≥ 100/√rypäät pp, ≤ 20 hälytystä/vrk, saman stromon muut variantit reuna > 0; jatkoon enintään 5 per arviointi (suurin reuna/kynnys) |
 | **Dopingtesti** | Selittyykö reuna volatiliteetilla tai kellonajalla? | Reuna ≥ 100/√rypäät pp verrokkeihin, jotka on täsmätty σ15:n ja kellonajan mukaan |
 | **Kuntopuntari** | Kestääkö ajan, markkinatilojen ja kulujen yli? | Molemmat puoliskot > 0; reuna > 0 vähintään puolessa Markkinan tila -nelikentistä (≥ 20 rypästä), mikään tila ei tuota yli 70 %; osuma > 50 % + kulut/(2σ) |
@@ -14,6 +15,9 @@ Säännöt: [liiga/saannot.json](liiga/saannot.json). Valinnat 3.11.2026, eivät
 | **Playoffit** | Koskematon jakso 2026-08-01 – 2026-10-31, **vain omistaja ajaa, kerran** | Reuna ≥ 100/√rypäät pp |
 | **Näytösottelu** | Hiljainen liveajo samalla mittarilla | Omistajan päätös |
 | **Tilastot** | Kaikki tulokset, myös karsitut (append-only) | – |
+
+Aikainen ylennys on kielletty: kesken jakson saa vain karsia, koska aikainen karsinta ei lisää sattumalöytöjä.
+Välitarkistuksessa tai Try outissa pudonnut naapurivariantti lasketaan naapurisäännössä "ei plussalla".
 
 Kirjoittajat (AI-istunnot) näkevät Treenileirin luvut, myöhemmistä vaiheista vain läpi / karsittu.
 
@@ -27,7 +31,27 @@ python3 ~/stromo-builder/liiga/liiga.py aja --kuiva  # mitä ajettaisiin
 python3 ~/stromo-builder/liiga/liiga.py aja          # ajaa jonon (Try outit ensin)
 python3 ~/stromo-builder/liiga/liiga.py raportti     # aamuraportti
 python3 ~/stromo-builder/liiga/liiga.py vie          # tilastot/ ja raportti haaraan tulokset/…
+python3 ~/stromo-builder/liiga/liiga.py paketti uupumus   # tiivistelmä leikepöydälle AI-tarkastukseen
+python3 ~/stromo-builder/liiga/liiga.py yo           # aja + raportti + vie yhdellä kertaa
 ```
+
+**Uudet stromot tulevat mukaan itsestään:** kun stromotiedosto on mergetty mainiin
+(= lukittu), seuraava ajo poimii sen Try outiin. Jokainen variantti siirtyy vaiheesta
+toiseen tulostensa perusteella; kukaan ei siirrä niitä käsin.
+
+**Yöajo:** `liiga/yoajo.sh` (Windowsin tehtävänajastin käynnistää, ks. alla). Se ohittaa
+yön, jos jokin ajo on jo käynnissä, ja kirjoittaa lokiin `data/research/liiga/yoajo.log`.
+
+🪟 Windows PowerShell (järjestelmänvalvojana), kerran:
+
+```powershell
+$a = New-ScheduledTaskAction -Execute "wsl.exe" -Argument "-d Ubuntu -- bash -lc ~/stromo-builder/liiga/yoajo.sh"
+$t = New-ScheduledTaskTrigger -Daily -At 22:30
+$s = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 10)
+Register-ScheduledTask -TaskName "LIIGA yoajo" -Action $a -Trigger $t -Settings $s
+```
+
+Tarkista jakelun nimi ensin komennolla `wsl -l -v` (esim. `Ubuntu` tai `Ubuntu-24.04`).
 
 LIIGA tunnistaa valmiit ajot stromon SHA-256:n, parametrien ja jakson perusteella,
 joten mitään ei ajeta kahdesti (myös kierroksen 1 `k1-`-ajot kelpaavat Treenileiriksi).

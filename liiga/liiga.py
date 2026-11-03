@@ -9,6 +9,8 @@ Ajetaan pelikoneella STROMO4-tutkimuskansiossa (~/stromo4-tutkimus):
     python3 ~/stromo-builder/liiga/liiga.py aja --kuiva # näytä komennot ajamatta
     python3 ~/stromo-builder/liiga/liiga.py raportti    # aamuraportti
     python3 ~/stromo-builder/liiga/liiga.py vie         # tilastot + raportti haaraan tulokset/…
+    python3 ~/stromo-builder/liiga/liiga.py paketti X   # ajon/variantin tiivistelmä leikepöydälle AI:lle
+    python3 ~/stromo-builder/liiga/liiga.py yo          # aja + raportti + vie (ajastettuun yöajoon)
 
 Vain standardikirjasto. LIIGA ei koskaan avaa koskematonta jaksoa (Playoffit):
 se tulostaa omistajalle valmiin komennon. Tulokset luetaan ajojen config.json-
@@ -201,7 +203,32 @@ def evaluate(vs, rows, runs):
         f = tryout_file(v)
         if f.exists() and not last(rows, "tryout", v):
             result = json.loads(f.read_text())
-            record(rows, {**base_row(v, "tryout"), "lapaisy": result.get("ok", False), "tulos": result})
+            cap = SAANNOT["tryout"]["max_halytykset"]
+            ok = result.get("ok", False) and result.get("alerts_per_day", 0) <= cap
+            record(rows, {**base_row(v, "tryout"), "lapaisy": ok, "tulos": result})
+    # Välitarkistus: ensimmäinen kolmannes saa vain pudottaa (tiheys, harvinaisuus, toivottomuus)
+    vt = t["valitarkistus"]
+    for v in vs:
+        if last(rows, "valitarkistus", v) or find_run(runs, v, t["alku"], t["loppu"])[1]:
+            continue
+        path, config = find_run(runs, v, t["alku"], vt["loppu"])
+        if config and config.get("status") == "complete":
+            m = metrics(path, config)
+            _, _, e = edge(m)
+            reasons = []
+            if m["rypaat"] < vt["min_rypaat"]:
+                reasons.append("harvinainen")
+            if m["per_vrk"] > vt["max_vrk"]:
+                reasons.append("tiheä")
+            if m["rypaat"] and e is not None and e < vt["toivottomuus_kerroin"] / math.sqrt(m["rypaat"]):
+                reasons.append("toivoton")
+            if e is None:
+                reasons.append("ei suuntaa")
+            record(
+                rows,
+                {**base_row(v, "valitarkistus"), "lapaisy": not reasons, "syyt": reasons, "ajo": path.name,
+                 "tulos": {**m, "reuna": e}},
+            )
     # Treenileiri
     for v in vs:
         path, config = find_run(runs, v, t["alku"], t["loppu"])
@@ -231,14 +258,20 @@ def evaluate(vs, rows, runs):
         row = last(rows, "treenileiri", v)
         if not row or row["syyt"] or last(rows, "ylennys", v):
             continue
-        neighbours = [
-            last(rows, "treenileiri", n) for n in vs if n["stromo"] == v["stromo"] and n is not v
-        ]
-        if neighbours and all(
-            n and n["tulos"]["reuna"] is not None and n["tulos"]["reuna"] > 0 for n in neighbours
-        ):
+        others = [n for n in vs if n["stromo"] == v["stromo"] and n is not v]
+        # Naapurin tila: reuna Treenileiriltä, tai välitarkistuksessa / Try outissa pudonnut = ei plussalla.
+        signs = []
+        for n in others:
+            nr = last(rows, "treenileiri", n)
+            if nr:
+                signs.append(nr["tulos"]["reuna"] is not None and nr["tulos"]["reuna"] > 0)
+            elif any((x := last(rows, ev, n)) and not x["lapaisy"] for ev in ("valitarkistus", "tryout")):
+                signs.append(False)
+            else:
+                signs.append(None)  # vielä kesken
+        if others and all(sg is True for sg in signs):
             candidates.append((row["tulos"]["reuna"] / row["tulos"]["kynnys"], v))
-        elif neighbours and all(n for n in neighbours):
+        elif others and False in signs:
             record(rows, {**base_row(v, "ylennys"), "lapaisy": False, "syy": "naapuri"})
     candidates.sort(key=lambda c: -c[0])
     for rank, (_, v) in enumerate(candidates):
@@ -333,8 +366,11 @@ def stage_of(rows, v):
     if not to["lapaisy"]:
         return "Try out", "karsittu"
     tr = last(rows, "treenileiri", v)
+    vt = last(rows, "valitarkistus", v)
+    if not tr and vt and not vt["lapaisy"]:
+        return "Treenileiri", "karsittu välitarkistuksessa: " + ", ".join(vt["syyt"])
     if not tr:
-        return "Treenileiri", "odottaa"
+        return "Treenileiri", "odottaa" if vt else "odottaa välitarkistusta"
     if tr["syyt"]:
         return "Treenileiri", "karsittu: " + ", ".join(tr["syyt"])
     up = last(rows, "ylennys", v)
@@ -389,6 +425,10 @@ def jobs(vs, rows, runs, state):
                 "research.check_stromo", str(v["file"]), "--json",
                 "--day", SAANNOT["tryout"]["paiva"], "--pair", SAANNOT["pari"],
             ] + param_args(v)))
+        elif stage == "Treenileiri" and status == "odottaa välitarkistusta":
+            path, _ = find_run(runs, v, t["alku"], t["valitarkistus"]["loppu"])
+            if not path:
+                out.append(("valitarkistus", v, replay_cmd(v, t["alku"], t["valitarkistus"]["loppu"], f"liiga-vt-{v['id']}")))
         elif stage == "Treenileiri" and status == "odottaa":
             path, _ = find_run(runs, v, t["alku"], t["loppu"])
             if not path:
@@ -405,7 +445,7 @@ def jobs(vs, rows, runs, state):
                 path, _ = find_run(runs, v, start, end)
                 if not path:
                     out.append(("kausi", v, replay_cmd(v, start, end, f"liiga-k{i}-{v['id']}")))
-    order = {"tryout": 0, "treenileiri": 1, "dopingtesti": 2, "kausi": 3}
+    order = {"tryout": 0, "valitarkistus": 1, "treenileiri": 2, "dopingtesti": 3, "kausi": 4}
     return sorted(out, key=lambda j: order[j[0]])
 
 
@@ -480,7 +520,9 @@ def report(vs, rows, state):
     out = [
         f"# LIIGA – raportti {datetime.now():%-d.%-m.%Y %H.%M}",
         "",
-        f"Variantteja {len(vs)}, Treenileirillä mitattu {len(tested)}. "
+        f"Variantteja {len(vs)}, välitarkistuksessa pudonneita "
+        f"{sum(1 for r in rows if r['tapahtuma'] == 'valitarkistus' and not r['lapaisy'])}, "
+        f"Treenileirillä mitattu {len(tested)}. "
         f"Sattumalta Treenileirin läpäiseviä odotetaan noin {fmt(len(tested) * alpha)} "
         f"(kynnys {t['kynnys_kerroin']}/√rypäät ≈ {fmt(alpha * 100)} % per variantti).",
         "",
@@ -519,23 +561,64 @@ def export(text):
     print(f"Viety haaraan {branch}. Avaa PR GitHubissa tai pyydä Claudea.")
 
 
+def package(target, vs, rows):
+    """Yksi markdown-paketti AI-tarkastukseen: stromo, tilastorivit ja ajojen summary.md:t."""
+    matches = [v for v in vs if target in (v["id"], v["stromo"], v["stromo"].split("/")[-1])]
+    run_dirs = [RUNS / target] if (RUNS / target / "config.json").exists() else []
+    if run_dirs and not matches:
+        sha = json.loads((run_dirs[0] / "config.json").read_text()).get("stromo_source_sha256")
+        matches = [v for v in vs if v["sha256"] == sha]
+    if not matches:
+        sys.exit(f"Ei löydy ajoa tai varianttia: {target}")
+    runs = index_runs()
+    out = [f"# LIIGA-paketti: {target}", ""]
+    seen_files = set()
+    for v in matches:
+        if v["file"] not in seen_files:
+            seen_files.add(v["file"])
+            out += [f"## Stromo {v['stromo']} (SHA-256 {v['sha256'][:12]})", "", "```python",
+                    v["file"].read_text(encoding="utf-8").rstrip(), "```", ""]
+        out += [f"## Variantti {v['id']}", "", "Tilastot:", "", "```json"]
+        out += [json.dumps(r, ensure_ascii=False, sort_keys=True) for r in rows
+                if r["sha256"] == v["sha256"] and r["params"] == v["params"]] or ["(ei rivejä)"]
+        out += ["```", ""]
+        for key, items in runs.items():
+            if key[0] != v["sha256"]:
+                continue
+            for params, path, config in items:
+                if all(params.get(k) == val for k, val in v["params"].items()) and (path / "summary.md").exists():
+                    out += [f"### Ajo {path.name} ({key[2]} – {key[3]})", "", (path / "summary.md").read_text().strip(), ""]
+    text = "\n".join(out) + "\n"
+    try:
+        subprocess.run(["clip.exe"], input=text.encode("utf-16-le"), check=True)
+        print(f"Paketti ({len(text):,} merkkiä) kopioitu leikepöydälle: liitä se Claudelle tai GPT:lle.")
+    except (OSError, subprocess.CalledProcessError):
+        print(text)
+
+
 def main():
     parser = argparse.ArgumentParser(description="LIIGA")
-    parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie"])
+    parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo"])
+    parser.add_argument("kohde", nargs="?", help="paketti: ajokansio, variantti tai stromon nimi")
     parser.add_argument("--kuiva", action="store_true")
     args = parser.parse_args()
     if not Path("research/replay.py").exists():
         sys.exit("Aja STROMO4-tutkimuskansiossa (~/stromo4-tutkimus).")
-    if args.komento == "aja":
+    if args.komento in ("aja", "yo"):
         run_jobs(args.kuiva)
-        return
+        if args.komento == "aja" or args.kuiva:
+            return
     vs, rows, runs = variants(), read_ledger(), index_runs()
     state = evaluate(vs, rows, runs)
     if args.komento == "tila":
         print(table(vs, rows, state))
     elif args.komento == "raportti":
         print(report(vs, rows, state))
-    else:
+    elif args.komento == "paketti":
+        if not args.kohde:
+            sys.exit("Anna ajokansio, variantti tai stromon nimi, esim. paketti uupumus")
+        package(args.kohde, vs, rows)
+    else:  # vie, yo
         export(report(vs, rows, state))
 
 
