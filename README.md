@@ -21,9 +21,11 @@ STROMO4:n sovelluskoodia, palvelimen tietoja eikä dataa.
 | Polku | Sisältö |
 |---|---|
 | `stromot/<tekijä>/` | Kunkin tekijän stromot, yksi tiedosto per stromo |
-| `tulokset/<tekijä>/` | Omistajan ajamat tulokset (`summary.md`), vasta lukituksen jälkeen |
 | `esimerkit/` | Rakenne-esimerkit; eivät ole tutkittavia stromoja |
 | `KILPAILU_KIERROS1.md` | Kilpailun säännöt (kierros 1) |
+| `LIIGA.md`, `liiga/` | Karsinta Try outista Näytösotteluun ja sen ajuri |
+| `tilastot/` | LIIGAn kirjanpito ja raportit (pelikone vie PR:nä) |
+| `tyokalut/` | Kierroskohtaiset apuskriptit |
 
 ## Työnkulku
 
@@ -32,7 +34,7 @@ STROMO4:n sovelluskoodia, palvelimen tietoja eikä dataa.
    parametreja tai logiikkaa ei muuteta; uusi idea = uusi tiedosto.
 3. Omistaja ajaa yhden päivän tarkistuksen. Jos tiedosto kaatuu ennen ensimmäistä
    täyttä ajoa, tekijä saa korjata sen kerran (kirjataan PR:ään).
-4. Omistaja ajaa kehitysjakson ja tallentaa tuloksen kansioon `tulokset/`.
+4. LIIGA ajaa vaiheet ([LIIGA.md](LIIGA.md)); tulokset kansioon `tilastot/`.
 
 ## Säännöt lyhyesti
 

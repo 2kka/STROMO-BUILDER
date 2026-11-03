@@ -1,0 +1,24 @@
+{
+  "pari": "BTC-USDT",
+  "tryout": {"paiva": "2026-01-02"},
+  "treenileiri": {
+    "alku": "2025-11-01",
+    "loppu": "2026-07-31",
+    "kynnys_kerroin": 100,
+    "min_rypaat": 100,
+    "max_vrk": 20,
+    "max_jatkoon": 5
+  },
+  "dopingtesti": {"kulut_pct": "0.20"},
+  "kausi": {
+    "kaudet": [
+      ["2021-09-01", "2022-08-31"],
+      ["2022-09-01", "2023-08-31"],
+      ["2023-09-01", "2024-08-31"],
+      ["2024-09-01", "2025-10-31"]
+    ],
+    "min_kaudet_plussalla": 3,
+    "alfa": 0.05
+  },
+  "playoffit": {"alku": "2026-08-01", "loppu": "2026-10-31", "kynnys_kerroin": 100}
+}
