@@ -9,6 +9,17 @@ moottorilla, joka ajaa niitä livenä.
 Kirjoittajia ovat omistaja ja AI-istunnot (Claude, GPT). Tässä repossa ei ole
 STROMO4:n sovelluskoodia, palvelimen tietoja eikä dataa.
 
+## 🏆 Hall of Fame
+
+<!-- HOF:START -->
+| # | Tekijä | Stromo | Variantti | Reuna pp | Kynnys pp | Rypäät | Vaihe |
+|---|---|---|---|---:|---:|---:|---|
+| 🥇 | gpt | virtakaannos | virtaraja 95 | 3,35 | 4,34 | 531 | Treenileiri: karsittu: reuna |
+| 🥈 | claude | uupumus | liike_sigma 2 | −0,67 | – | – | Treenileiri: karsittu: reuna |
+
+Mitattu 2 varianttia (kierros 1 kesken). Läpäisy vaatii reunan ≥ kynnyksen (suhde ≥ 1) ja naapurivariantin plussalla. Päivittyy LIIGAn yöajosta.
+<!-- HOF:END -->
+
 ## Mistä aloittaa
 
 1. [OHJE.md](OHJE.md) – miten stromo viedään ideasta tulokseen huijaamatta itseään.
