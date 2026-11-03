@@ -32,7 +32,7 @@ jos stromo kaatuu yhden päivän tarkistuksessa ennen ensimmäistä täyttä ajo
 2. **Validointijakso** 2021-09-01 – 2025-10-31 läpäisseille samalla kriteerillä.
 3. **Koskematon jakso** 2026-08-01 – 2026-10-31 kerran validoinnin läpäisseille.
 
-Tulokset tallennetaan kansioon `tulokset/<tekijä>/` vaihe kerrallaan.
+Tulokset kirjataan LIIGAn tilastoihin (`tilastot/`); ks. [LIIGA.md](LIIGA.md). Kierroksen 1 kriteerit (130/√rypäät) pätevät kilpailun Treenileirissä.
 
 ## Voittaja
 
