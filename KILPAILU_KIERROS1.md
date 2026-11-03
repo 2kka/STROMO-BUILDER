@@ -26,7 +26,7 @@ jos stromo kaatuu yhden päivän tarkistuksessa ennen ensimmäistä täyttä ajo
 
 ## Arviointi
 
-1. **Kehitysjakso** 2025-11-01 – 2026-07-31, BTC-USDT: läpäisy [OHJE.md](OHJE.md):n
+1. **Kehitysjakso** 2025-11-01 – 2026-07-31, BTC-USDT, LIIGAn Treenileirinä (3.11. klo 11.23 alkaen; ensimmäinen kolmannes välitarkistuksena, joka saa vain pudottaa, samoin säännöin molemmille): läpäisy [OHJE.md](OHJE.md):n
    kriteereillä (≥ 100 rypästä, reuna ≥ 130/√rypäät pp, ≤ 20 hälytystä/vrk,
    naapurivariantti samaan suuntaan).
 2. **Validointijakso** 2021-09-01 – 2025-10-31 läpäisseille samalla kriteerillä.

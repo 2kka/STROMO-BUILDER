@@ -106,11 +106,16 @@ def index_runs():
     return runs
 
 
-def find_run(runs, v, start, end):
+def find_run(runs, v, start, end, *, complete=True):
+    """Valmis ajo (tai complete=False: mikä tahansa, myös kesken oleva)."""
+    found = (None, None)
     for params, path, config in runs.get((v["sha256"], SAANNOT["pari"], start, end), []):
         if all(params.get(k) == val for k, val in v["params"].items()):
-            return path, config
-    return None, None
+            if config.get("status") == "complete":
+                return path, config
+            if not complete and found[0] is None:
+                found = (path, config)
+    return found
 
 
 def clusters(timestamps):
@@ -407,6 +412,7 @@ def param_args(v):
 
 
 def replay_cmd(v, start, end, run_id):
+    run_id = f"{run_id}-{datetime.now():%m%d%H%M}"
     return UV + [
         "research.replay", "--stromo", v["id"], "--stromo-file", str(v["file"]),
         "--pair", SAANNOT["pari"], "--start", start, "--end", end,
