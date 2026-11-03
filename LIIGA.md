@@ -31,7 +31,27 @@ python3 ~/stromo-builder/liiga/liiga.py aja --kuiva  # mitä ajettaisiin
 python3 ~/stromo-builder/liiga/liiga.py aja          # ajaa jonon (Try outit ensin)
 python3 ~/stromo-builder/liiga/liiga.py raportti     # aamuraportti
 python3 ~/stromo-builder/liiga/liiga.py vie          # tilastot/ ja raportti haaraan tulokset/…
+python3 ~/stromo-builder/liiga/liiga.py paketti uupumus   # tiivistelmä leikepöydälle AI-tarkastukseen
+python3 ~/stromo-builder/liiga/liiga.py yo           # aja + raportti + vie yhdellä kertaa
 ```
+
+**Uudet stromot tulevat mukaan itsestään:** kun stromotiedosto on mergetty mainiin
+(= lukittu), seuraava ajo poimii sen Try outiin. Jokainen variantti siirtyy vaiheesta
+toiseen tulostensa perusteella; kukaan ei siirrä niitä käsin.
+
+**Yöajo:** `liiga/yoajo.sh` (Windowsin tehtävänajastin käynnistää, ks. alla). Se ohittaa
+yön, jos jokin ajo on jo käynnissä, ja kirjoittaa lokiin `data/research/liiga/yoajo.log`.
+
+🪟 Windows PowerShell (järjestelmänvalvojana), kerran:
+
+```powershell
+$a = New-ScheduledTaskAction -Execute "wsl.exe" -Argument "-d Ubuntu -- bash -lc ~/stromo-builder/liiga/yoajo.sh"
+$t = New-ScheduledTaskTrigger -Daily -At 22:30
+$s = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 10)
+Register-ScheduledTask -TaskName "LIIGA yoajo" -Action $a -Trigger $t -Settings $s
+```
+
+Tarkista jakelun nimi ensin komennolla `wsl -l -v` (esim. `Ubuntu` tai `Ubuntu-24.04`).
 
 LIIGA tunnistaa valmiit ajot stromon SHA-256:n, parametrien ja jakson perusteella,
 joten mitään ei ajeta kahdesti (myös kierroksen 1 `k1-`-ajot kelpaavat Treenileiriksi).

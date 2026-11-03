@@ -9,6 +9,8 @@ Ajetaan pelikoneella STROMO4-tutkimuskansiossa (~/stromo4-tutkimus):
     python3 ~/stromo-builder/liiga/liiga.py aja --kuiva # näytä komennot ajamatta
     python3 ~/stromo-builder/liiga/liiga.py raportti    # aamuraportti
     python3 ~/stromo-builder/liiga/liiga.py vie         # tilastot + raportti haaraan tulokset/…
+    python3 ~/stromo-builder/liiga/liiga.py paketti X   # ajon/variantin tiivistelmä leikepöydälle AI:lle
+    python3 ~/stromo-builder/liiga/liiga.py yo          # aja + raportti + vie (ajastettuun yöajoon)
 
 Vain standardikirjasto. LIIGA ei koskaan avaa koskematonta jaksoa (Playoffit):
 se tulostaa omistajalle valmiin komennon. Tulokset luetaan ajojen config.json-
@@ -559,23 +561,64 @@ def export(text):
     print(f"Viety haaraan {branch}. Avaa PR GitHubissa tai pyydä Claudea.")
 
 
+def package(target, vs, rows):
+    """Yksi markdown-paketti AI-tarkastukseen: stromo, tilastorivit ja ajojen summary.md:t."""
+    matches = [v for v in vs if target in (v["id"], v["stromo"], v["stromo"].split("/")[-1])]
+    run_dirs = [RUNS / target] if (RUNS / target / "config.json").exists() else []
+    if run_dirs and not matches:
+        sha = json.loads((run_dirs[0] / "config.json").read_text()).get("stromo_source_sha256")
+        matches = [v for v in vs if v["sha256"] == sha]
+    if not matches:
+        sys.exit(f"Ei löydy ajoa tai varianttia: {target}")
+    runs = index_runs()
+    out = [f"# LIIGA-paketti: {target}", ""]
+    seen_files = set()
+    for v in matches:
+        if v["file"] not in seen_files:
+            seen_files.add(v["file"])
+            out += [f"## Stromo {v['stromo']} (SHA-256 {v['sha256'][:12]})", "", "```python",
+                    v["file"].read_text(encoding="utf-8").rstrip(), "```", ""]
+        out += [f"## Variantti {v['id']}", "", "Tilastot:", "", "```json"]
+        out += [json.dumps(r, ensure_ascii=False, sort_keys=True) for r in rows
+                if r["sha256"] == v["sha256"] and r["params"] == v["params"]] or ["(ei rivejä)"]
+        out += ["```", ""]
+        for key, items in runs.items():
+            if key[0] != v["sha256"]:
+                continue
+            for params, path, config in items:
+                if all(params.get(k) == val for k, val in v["params"].items()) and (path / "summary.md").exists():
+                    out += [f"### Ajo {path.name} ({key[2]} – {key[3]})", "", (path / "summary.md").read_text().strip(), ""]
+    text = "\n".join(out) + "\n"
+    try:
+        subprocess.run(["clip.exe"], input=text.encode("utf-16-le"), check=True)
+        print(f"Paketti ({len(text):,} merkkiä) kopioitu leikepöydälle: liitä se Claudelle tai GPT:lle.")
+    except (OSError, subprocess.CalledProcessError):
+        print(text)
+
+
 def main():
     parser = argparse.ArgumentParser(description="LIIGA")
-    parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie"])
+    parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo"])
+    parser.add_argument("kohde", nargs="?", help="paketti: ajokansio, variantti tai stromon nimi")
     parser.add_argument("--kuiva", action="store_true")
     args = parser.parse_args()
     if not Path("research/replay.py").exists():
         sys.exit("Aja STROMO4-tutkimuskansiossa (~/stromo4-tutkimus).")
-    if args.komento == "aja":
+    if args.komento in ("aja", "yo"):
         run_jobs(args.kuiva)
-        return
+        if args.komento == "aja" or args.kuiva:
+            return
     vs, rows, runs = variants(), read_ledger(), index_runs()
     state = evaluate(vs, rows, runs)
     if args.komento == "tila":
         print(table(vs, rows, state))
     elif args.komento == "raportti":
         print(report(vs, rows, state))
-    else:
+    elif args.komento == "paketti":
+        if not args.kohde:
+            sys.exit("Anna ajokansio, variantti tai stromon nimi, esim. paketti uupumus")
+        package(args.kohde, vs, rows)
+    else:  # vie, yo
         export(report(vs, rows, state))
 
 
