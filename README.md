@@ -14,10 +14,13 @@ STROMO4:n sovelluskoodia, palvelimen tietoja eikä dataa.
 <!-- HOF:START -->
 | # | Tekijä | Stromo | Variantti | Reuna pp | Kynnys pp | Rypäät | Vaihe |
 |---|---|---|---|---:|---:|---:|---|
-| 🥇 | gpt | virtakaannos | virtaraja 95 | 3,35 | 4,34 | 531 | Treenileiri: karsittu: reuna |
-| 🥈 | claude | uupumus | liike_sigma 2 | −0,67 | – | – | Treenileiri: karsittu: reuna |
+| 🥇 | claude | likviditeettihaku | jakso 14400 | 4,48 | 2,31 | 1880 | Treenileiri: karsittu: naapuri |
+| 🥈 | gpt | virtakaannos | virtaraja 97 | 7,39 | 6,02 | 276 | Dopingtesti: karsittu |
+| 🥉 | omistaja | absorptio | ikkuna 600 | 3,73 | 3,39 | 871 | Treenileiri: karsittu: naapuri |
+| 4 | claude | isot_liput | maara_p 50 | 4,32 | 5,60 | 319 | Treenileiri: karsittu: reuna |
+| 5 | gpt | virtakaannos | virtaraja 95 | 3,35 | 4,34 | 531 | Treenileiri: karsittu: reuna |
 
-Mitattu 2 varianttia (kierros 1 kesken). Läpäisy vaatii reunan ≥ kynnyksen (suhde ≥ 1) ja naapurivariantin plussalla. Päivittyy LIIGAn yöajosta.
+Mitattu 13 varianttia. Läpäisy vaatii reunan ≥ kynnyksen (suhde ≥ 1) ja naapurivariantin plussalla. Päivittyy LIIGAn yöajosta.
 <!-- HOF:END -->
 
 ## Mistä aloittaa
