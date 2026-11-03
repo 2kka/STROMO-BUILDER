@@ -536,7 +536,7 @@ def report(vs, rows, state):
         "|---|---:|---:|",
     ]
     out += [f"| {s} | {reached[s]} | {passed[s]} |" for s in VAIHEET[:-1]]
-    out += ["", table(vs, rows, state)]
+    out += ["", "## 🏆 Hall of Fame", "", hall_of_fame(vs, rows, state), "", "## Kaikki variantit", "", table(vs, rows, state)]
     ready = [v["id"] for v in vs if state[v["id"]] == ("Playoffit", "odottaa omistajaa")]
     if ready:
         out += ["", "**Valmiina Playoffeihin (omistaja ajaa, kerran):**", ""]
@@ -548,7 +548,50 @@ def report(vs, rows, state):
     return "\n".join(out) + "\n"
 
 
-def export(text):
+def hall_of_fame(vs, rows, state, top=5):
+    """Pistepörssi: Treenileirin reuna suhteessa kynnykseen, paras ensin."""
+    best = []
+    for v in vs:
+        row = last(rows, "treenileiri", v)
+        if row and row["tulos"].get("reuna") is not None and row["tulos"].get("kynnys"):
+            t = row["tulos"]
+            best.append((t["reuna"] / t["kynnys"], v, t))
+    best.sort(key=lambda b: -b[0])
+    medals = ["🥇", "🥈", "🥉"]
+    lines = [
+        "| # | Tekijä | Stromo | Variantti | Reuna pp | Kynnys pp | Rypäät | Vaihe |",
+        "|---|---|---|---|---:|---:|---:|---|",
+    ]
+    for i, (ratio, v, t) in enumerate(best[:top]):
+        author, name = v["stromo"].split("/", 1)
+        params = ", ".join(f"{k} {val}" for k, val in v["params"].items()) or "oletus"
+        stage, status = state[v["id"]]
+        mark = medals[i] if i < 3 else str(i + 1)
+        lines.append(
+            f"| {mark} | {author} | {name} | {params} | {fmt(t['reuna'], 2)} | {fmt(t['kynnys'], 2)} "
+            f"| {t['rypaat']} | {stage}: {status} |"
+        )
+    if not best:
+        lines.append("| – | – | – | – | – | – | – | Treenileiri kesken |")
+    lines += [
+        "",
+        f"Mitattu {len(best)} varianttia. Läpäisy vaatii reunan ≥ kynnyksen (suhde ≥ 1) "
+        "ja naapurivariantin plussalla. Päivittyy LIIGAn yöajosta.",
+    ]
+    return "\n".join(lines)
+
+
+def update_readme(text_block):
+    readme = BUILDER / "README.md"
+    content = readme.read_text()
+    start, end = "<!-- HOF:START -->", "<!-- HOF:END -->"
+    if start in content and end in content:
+        head, rest = content.split(start, 1)
+        _, tail = rest.split(end, 1)
+        readme.write_text(f"{head}{start}\n{text_block}\n{end}{tail}")
+
+
+def export(text, hof=None):
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
     branch = f"tulokset/{stamp}"
     git = ["git", "-C", str(BUILDER)]
@@ -559,7 +602,9 @@ def export(text):
     if TILASTOT.exists():
         (target / "tilastot.jsonl").write_text(TILASTOT.read_text())
     (target / "raportti.md").write_text(text)
-    subprocess.run(git + ["add", "tilastot"], check=True)
+    if hof:
+        update_readme(hof)
+    subprocess.run(git + ["add", "tilastot", "README.md"], check=True)
     subprocess.run(git + ["-c", "user.name=LIIGA pelikone", "-c", "user.email=liiga@localhost",
                           "commit", "-q", "-m", f"LIIGA-tulokset {stamp}"], check=True)
     subprocess.run(git + ["push", "-q", "origin", branch], check=True)
@@ -625,7 +670,7 @@ def main():
             sys.exit("Anna ajokansio, variantti tai stromon nimi, esim. paketti uupumus")
         package(args.kohde, vs, rows)
     else:  # vie, yo
-        export(report(vs, rows, state))
+        export(report(vs, rows, state), hall_of_fame(vs, rows, state))
 
 
 if __name__ == "__main__":
