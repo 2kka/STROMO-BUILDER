@@ -13,7 +13,7 @@
 ## Ehdot
 | Nimi | Palikka | Asetukset | Tyyppi | Pääehto | Voimassa / hystereesi |
 |---|---|---|---|---|---|
-| UTC-päivänvaihde | Uusi: UTC-aikaikkunan alkaminen | Suljettujen 60 s näytteiden kauppa-aikaleima; kerran vuorokaudessa UTC 00:00 avautuva ikkuna, kesto alkuikkuna_min (20/30/40 min) | tapahtuma | kyllä | voimassa_s = alkuikkuna_min × 60 s |
+| UTC-päivänvaihde | Aikaikkunan alueen murto (alkuhetki-erikoistapaus) | UTC 00:00, joka päivä; pituus_min=0, ei aluetta/murtoa; tapahtuma voimassa alkuikkuna_min (20/30/40 min), vain suljetut 60 s havainnot | tapahtuma | kyllä | voimassa_s = alkuikkuna_min × 60 s |
 | Hinta lähtee ylöspäin | log_change(close, 300 s) | 60 s suljettujen close-hintojen 5 min log-tuotto > 0 | ehto | ei | — |
 | Kaupat osallistuvat | sum(count, 300 s) vs percentile | 60 s count; 5 min summa ≥ oman 24 h historian p50 | ehto | ei | — |
 
@@ -25,7 +25,8 @@
 Enintään kaksi säädettävää; tutkimusstromon naapurit on lukittu ennen yhtään ajoa.
 
 ## Tarvittavat uudet palikat
-- **UTC-aikaikkunan alkaminen:** tunnistaa suljettujen 60 s kauppanäytteiden UTC-aikaleimasta vuorokauden 00:00-rajan ja muodostaa sen jälkeen määräajan voimassa olevan tapahtuman. Jos data puuttuu rajalta, se ei saa keksiä tapahtumaa takautuvasti. Käyttää pelkkää historiassa ja livessä olevaa kauppojen aikaleimaa; ei seinäkelloa tai kirjaa.
+- **Ei erillistä uutta UTC-alkupalikkaa.** Käytetään Clauden kortissa [`kortit/claude/usa_avauksen_alueen_murto.md`](../claude/usa_avauksen_alueen_murto.md) kuvattua yleiskäyttöistä **aikaikkunan alueen murto** -palikkaa **alkuhetki-erikoistapauksena**, kuten Claude kortissaan ehdottaa: `alku=00:00`, `aikavyohyke=UTC`, `paivat=ma–su`, `pituus_min=0`, **ei aluetta eikä murtoehtoa**, `voimassa_min=alkuikkuna_min` (20/30/40). Palikka julkaisee UTC-ikkunan alun tapahtumana, jonka voimassaolo kattaa alkuikkunan; ▼-haaraa ei lisätä, koska tämä kortti pysyy **▲**.
+- Jos yhteinen palikka ei vielä tue nollapituista aluetta, sen **samaan palikkaan** toteutetaan eksplisiittinen `alkuhetki`-toimintatapa. Nollaleveyksistä hinta-aluetta ei saa käsitellä vale-murtona. Vain kaupankäynnin UTC-aikaleimat ja suljetut 60 s näytteet; datakatko 00:00-rajalla estää takautuvan tapahtuman. Näin yksi toteutus palvelee molempia kortteja.
 
 ## Odotettu tiheys
 - Etukäteisarvio 0–1 hälytystä/vrk; kunkin päivän ensimmäinen kaikki ehdot täyttävä osuma kuuluu enintään yhteen UTC-ikkunaan. Kiinteä cooldown_seconds = 86400 s rajaa myös voimassaolojakson aikana yhteen; 9 kk:ssa ≥ 100 rypästä on mahdollinen mutta epävarma.
@@ -34,4 +35,4 @@ Enintään kaksi säädettävää; tutkimusstromon naapurit on lukittu ennen yht
 - Jos samaan UTC-kellonaikaan ja sigma15-tasoon täsmättyjen verrokkien 3A-osuma on yhtä hyvä tai parempi, päivänvaihteen osallistumisella ei ole erillistä suunnallista lisäarvoa. Naapuri-ikkunoiden epäpositiivinen reuna kumoaa myös robustiuden.
 
 ## Avoimet kysymykset
-- Päivänvaihteen voi havaita myöhässä katkon vuoksi; tapahtuma tulee jättää väliin eikä jälkikäteisellä näytteellä saa antaa vanhaa hälytystä.
+- Päivänvaihteen havainto voi puuttua katkon vuoksi; silloin yhteisen aikaikkunapalikan on jätettävä kyseisen päivän aloitustapahtuma tekemättä eikä se saa laukaista vanhaa hälytystä katkon jälkeen. Tarkistettava, että Clauden palikan `pituus_min=0` / `alkuhetki`-tila toteutetaan **ilman hintarajan murtovaatimusta** ja että tämän kortin suunta pysyy vain ▲.
