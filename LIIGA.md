@@ -71,3 +71,10 @@ LIIGA tunnistaa valmiit ajot stromon SHA-256:n, parametrien ja jakson perusteell
 joten mitään ei ajeta kahdesti (myös kierroksen 1 `k1-`-ajot kelpaavat Treenileiriksi).
 Dopingtesti ja Kuntopuntari odottavat STROMO4:n työkalua `research/tappotestit.py`
 (Codex 3.1b); Kausi vaatii 2021–2025 kaupat pelikoneelle.
+
+**Yhteisajo (omistaja 4.11.2026):** saman vaiheen ja jakson ajot (välitarkistus, Treenileiri,
+kausi) ajetaan yhtenä `research.replay --batch` -eränä, kun ne kuuluvat samaan rytmiluokkaan
+(deklaratiivinen / tunnistin / Python), enintään 60 varianttia. Kaupat luetaan kerran, yhteiset
+palikat lasketaan kerran. Tulokset tallentuvat `runs/liiga-era-…/<variantti>/` samassa muodossa
+kuin yksittäisajo (STROMO4:n testi: erä = yksittäisajot tavuina).
+
