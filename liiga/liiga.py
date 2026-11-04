@@ -12,6 +12,12 @@ Ajetaan pelikoneella STROMO4-tutkimuskansiossa (~/stromo4-tutkimus):
     python3 ~/stromo-builder/liiga/liiga.py paketti X   # ajon/variantin tiivistelmä leikepöydälle AI:lle
     python3 ~/stromo-builder/liiga/liiga.py yo          # aja + raportti + vie (ajastettuun yöajoon)
 
+Etäohjaus (palvelimen liiga.stromo.uk SSH:n pakotetun komennon liiga/liiga-ohjaus kautta):
+
+    liiga.py tila --json            # koneluettava tila (versio 1)
+    liiga.py kaynnista | pysayta    # aja-silmukka taustalle / SIGINT sille ja käynnissä olevalle ajolle
+    liiga.py jono-ensin|jono-ohita|jono-palauta <variantti>   # omistajan järjestys, data/research/liiga/jono.json
+
 Vain standardikirjasto. LIIGA ei koskaan avaa koskematonta jaksoa (Playoffit):
 se tulostaa omistajalle valmiin komennon. Tulokset luetaan ajojen config.json-
 tiedostoista, joten valmiita ajoja (myös kierroksen 1 k1-ajot) ei ajeta uudelleen.
@@ -19,6 +25,10 @@ tiedostoista, joten valmiita ajoja (myös kierroksen 1 k1-ajot) ei ajeta uudelle
 
 import argparse
 import ast
+import fcntl
+import os
+import re
+import signal
 import hashlib
 import itertools
 import json
@@ -34,6 +44,13 @@ SAANNOT = json.loads((BUILDER / "liiga" / "saannot.json").read_text())
 RUNS = Path("data/research/runs")
 TILA = Path("data/research/liiga")
 TILASTOT = TILA / "tilastot.jsonl"
+JONO = TILA / "jono.json"  # omistajan järjestys: {"ensin": [id…], "ohitetut": [id…]}
+RUNNING = TILA / "kaynnissa.json"
+LOCK = TILA / "aja.lock"
+PIDFILE = TILA / "aja.pid"
+STAGE_OF_JOB = {"tryout": "Try out", "valitarkistus": "Treenileiri", "treenileiri": "Treenileiri",
+                "dopingtesti": "Dopingtesti", "kausi": "Kausi"}
+ARVIO_S = {"tryout": 90, "valitarkistus": 180, "treenileiri": 600, "dopingtesti": 120, "kausi": 1200}
 CLUSTER_MS = 60 * 60_000
 VAIHEET = ["Try out", "Treenileiri", "Dopingtesti", "Kuntopuntari", "Kausi", "Playoffit", "Näytösottelu"]
 # Tappotestit (research.tappotestit) jaetaan kahteen vaiheeseen:
@@ -472,17 +489,43 @@ def jobs(vs, rows, runs, state):
 
 
 def run_jobs(dry):
+    if dry:
+        return run_queue(dry)
+    TILA.mkdir(parents=True, exist_ok=True)
+    with LOCK.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("LIIGA on jo käynnissä.", flush=True)
+            return
+        PIDFILE.write_text(str(os.getpid()))
+        try:
+            run_queue(dry)
+        except KeyboardInterrupt:
+            print(f"{datetime.now():%H.%M} pysäytetty.", flush=True)
+        finally:
+            RUNNING.unlink(missing_ok=True)
+            PIDFILE.unlink(missing_ok=True)
+
+
+def run_queue(dry):
     while True:
         vs, rows, runs = variants(), read_ledger(), index_runs()
         state = evaluate(vs, rows, runs)
-        todo = jobs(vs, rows, runs, state)
+        todo = [j for j in apply_queue(jobs(vs, rows, runs, state)) if not j[3]]
         if not todo:
             print("Jono tyhjä.")
             return
-        kind, v, cmd = todo[0]
+        kind, v, cmd, _ = todo[0]
+        if not dry:
+            atomic_write(RUNNING, {
+                "tyyppi": kind, "id": v["id"], "ajo": output_of(cmd),
+                "alkoi": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "vaihe": STAGE_OF_JOB[kind],
+            })
         print(f"{datetime.now():%H.%M} {kind}: {v['id']}", flush=True)
         if dry:
-            for kind, v, cmd in todo:
+            for kind, v, cmd, _ in todo:
                 print(f"  {kind:12} {' '.join(cmd)}")
             return
         if kind == "tryout":
@@ -564,8 +607,8 @@ def report(vs, rows, state):
     return "\n".join(out) + "\n"
 
 
-def hall_of_fame(vs, rows, state, top=5):
-    """Pistepörssi: Treenileirin reuna suhteessa kynnykseen, paras ensin."""
+def hof_entries(vs, rows):
+    """Treenileirillä mitatut, reuna/kynnys-suhteen mukaan paras ensin."""
     best = []
     for v in vs:
         row = last(rows, "treenileiri", v)
@@ -573,6 +616,12 @@ def hall_of_fame(vs, rows, state, top=5):
             t = row["tulos"]
             best.append((t["reuna"] / t["kynnys"], v, t))
     best.sort(key=lambda b: -b[0])
+    return best
+
+
+def hall_of_fame(vs, rows, state, top=5):
+    """Pistepörssi: Treenileirin reuna suhteessa kynnykseen, paras ensin."""
+    best = hof_entries(vs, rows)
     medals = ["🥇", "🥈", "🥉"]
     lines = [
         "| # | Tekijä | Stromo | Variantti | Reuna pp | Kynnys pp | Rypäät | Vaihe |",
@@ -663,14 +712,191 @@ def package(target, vs, rows):
         print(text)
 
 
+# ---------- ohjaus (liiga-ohjaus / liiga.stromo.uk) ----------
+
+
+def atomic_write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    os.replace(tmp, path)
+
+
+def read_json(path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def queue_control():
+    c = read_json(JONO, {})
+    return {"ensin": list(c.get("ensin", [])), "ohitetut": list(c.get("ohitetut", []))}
+
+
+def apply_queue(todo):
+    """(laji, v, komento, ohitettu): omistajan 'ensin' kärkeen, ohitetut merkitään."""
+    c = queue_control()
+    first = {i: n for n, i in enumerate(c["ensin"])}
+    out = [(k, v, cmd, v["id"] in c["ohitetut"]) for k, v, cmd in todo]
+    return sorted(out, key=lambda j: (j[3], first.get(j[1]["id"], len(first))))
+
+
+def output_of(cmd):
+    return Path(cmd[cmd.index("--output") + 1]).name if "--output" in cmd else None
+
+
+def liiga_running():
+    """Onko aja-silmukka käynnissä (lukko varattu)?"""
+    if not LOCK.exists():
+        return False
+    with LOCK.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+
+
+def estimates(runs):
+    """Mediaanikesto valmiista ajoista samalla jaksolla, muuten vakioarvio."""
+    t, k = SAANNOT["treenileiri"], SAANNOT["kausi"]
+    spans = {"valitarkistus": [(t["alku"], t["valitarkistus"]["loppu"])], "treenileiri": [(t["alku"], t["loppu"])],
+             "kausi": [tuple(x) for x in k["kaudet"]]}
+    out = dict(ARVIO_S)
+    for kind, wanted in spans.items():
+        times = sorted(
+            c["elapsed_seconds"]
+            for (_, _, start, end), items in runs.items() if (start, end) in wanted
+            for _, _, c in items if c.get("status") == "complete" and c.get("elapsed_seconds")
+        )
+        if times:
+            out[kind] = round(times[len(times) // 2])
+    return out
+
+
+def state_json(vs, rows, runs, state):
+    by_stage = {s: [0, 0] for s in VAIHEET}
+    for v in vs:
+        stage, status = state[v["id"]]
+        i = VAIHEET.index(stage)
+        for s in VAIHEET[: i + 1]:
+            by_stage[s][0] += 1
+        for s in VAIHEET[:i]:
+            by_stage[s][1] += 1
+    variants_out = []
+    for v in vs:
+        stage, status = state[v["id"]]
+        tr = last(rows, "treenileiri", v)
+        t = tr["tulos"] if tr else None
+        variants_out.append({
+            "id": v["id"], "stromo": v["stromo"], "tekija": v["stromo"].split("/", 1)[0],
+            "params": v["params"], "vaihe": stage, "tila": status,
+            "treenileiri": {key: t.get(key) for key in ("reuna", "kynnys", "rypaat", "osuma", "verrokki", "per_vrk")}
+            if t else None,
+        })
+    hof = [{"id": v["id"], "stromo": v["stromo"], "tekija": v["stromo"].split("/", 1)[0], "params": v["params"],
+            "suhde": ratio, "reuna": t["reuna"], "kynnys": t["kynnys"], "rypaat": t["rypaat"],
+            "vaihe": state[v["id"]][0], "tila": state[v["id"]][1]}
+           for ratio, v, t in hof_entries(vs, rows)[:5]]
+    est = estimates(runs)
+    queue = [{"tyyppi": kind, "id": v["id"], "tekija": v["stromo"].split("/", 1)[0],
+              "arvio_s": est.get(kind), "ohitettu": skipped, "syy": None}
+             for kind, v, _, skipped in apply_queue(jobs(vs, rows, runs, state))]
+    queue += [{"tyyppi": "treenileiri", "id": v["id"], "tekija": v["stromo"].split("/", 1)[0],
+               "arvio_s": None, "ohitettu": False, "syy": "naapuri karsittu"}
+              for v in vs if state[v["id"]][1] == "ei voi edetä: naapuri karsittu"]
+    running = liiga_running()
+    current = read_json(RUNNING, None) if running else None
+    if current:
+        config = read_json(RUNS / current["ajo"] / "config.json", {}) if current.get("ajo") else {}
+        pct, eta = config.get("progress_percent"), config.get("eta_seconds")
+        current["edistyminen"] = None if pct is None else max(0.0, min(1.0, pct / 100))
+        current["arvio_valmis"] = (
+            datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + eta, timezone.utc).isoformat(timespec="seconds")
+            if isinstance(eta, (int, float)) else None
+        )
+    return {
+        "versio": 1,
+        "aika": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "vaiheet": [{"nimi": s, "saapui": a, "lapi": b} for s, (a, b) in by_stage.items()],
+        "variantit": variants_out,
+        "hall_of_fame": hof,
+        "kaynnissa": current,
+        "jono": queue,
+        "pelikone": {"liiga_kaynnissa": running},
+    }
+
+
+def start_background():
+    if liiga_running():
+        return {"ok": True, "viesti": "LIIGA on jo käynnissä"}
+    TILA.mkdir(parents=True, exist_ok=True)
+    with (TILA / "aja.log").open("a") as log:
+        child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "aja"], stdin=subprocess.DEVNULL,
+                                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    return {"ok": True, "pid": child.pid}
+
+
+def stop_background():
+    """SIGINT vain omalle aja-silmukalle ja sen prosessiryhmälle (myös käynnissä oleva ajo)."""
+    if not liiga_running():
+        return {"ok": True, "viesti": "LIIGA ei ole käynnissä"}
+    pid = int(PIDFILE.read_text())
+    cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    if not any(part.endswith(b"liiga.py") for part in cmdline) or b"aja" not in cmdline:
+        raise ValueError("PID ei ole LIIGAn aja-prosessi")
+    os.killpg(os.getpgid(pid), signal.SIGINT)
+    return {"ok": True, "pysaytetty": pid}
+
+
+def queue_command(command, identifier, vs):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,511}", identifier or ""):
+        raise ValueError("Virheellinen varianttitunniste")
+    if identifier not in {v["id"] for v in vs}:
+        raise ValueError("Tuntematon variantti")
+    c = queue_control()
+    c["ensin"] = [i for i in c["ensin"] if i != identifier]
+    if command == "jono-ensin":
+        c["ohitetut"] = [i for i in c["ohitetut"] if i != identifier]
+        c["ensin"].insert(0, identifier)
+    elif command == "jono-ohita":
+        if identifier not in c["ohitetut"]:
+            c["ohitetut"].append(identifier)
+    else:  # jono-palauta
+        c["ohitetut"] = [i for i in c["ohitetut"] if i != identifier]
+    atomic_write(JONO, c)
+    return {"ok": True, **c}
+
+
 def main():
     parser = argparse.ArgumentParser(description="LIIGA")
-    parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo"])
-    parser.add_argument("kohde", nargs="?", help="paketti: ajokansio, variantti tai stromon nimi")
+    parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo", "kaynnista",
+                                            "pysayta", "jono-ensin", "jono-ohita", "jono-palauta"])
+    parser.add_argument("kohde", nargs="?", help="paketti: ajokansio, variantti tai stromon nimi; jono-*: variantti")
     parser.add_argument("--kuiva", action="store_true")
+    parser.add_argument("--json", action="store_true", help="tila: koneluettava (liiga.stromo.uk)")
     args = parser.parse_args()
     if not Path("research/replay.py").exists():
         sys.exit("Aja STROMO4-tutkimuskansiossa (~/stromo4-tutkimus).")
+    machine = args.json or args.komento in ("kaynnista", "pysayta") or args.komento.startswith("jono-")
+    if machine:
+        try:
+            if args.komento == "kaynnista":
+                out = start_background()
+            elif args.komento == "pysayta":
+                out = stop_background()
+            elif args.komento.startswith("jono-"):
+                out = queue_command(args.komento, args.kohde, variants())
+            else:
+                vs, rows, runs = variants(), read_ledger(), index_runs()
+                out = state_json(vs, rows, runs, evaluate(vs, rows, runs))
+            print(json.dumps(out, ensure_ascii=False, allow_nan=False))
+        except Exception as error:  # noqa: BLE001 – koneluettava virhe palvelimelle
+            print(json.dumps({"virhe": f"{type(error).__name__}: {error}"}, ensure_ascii=False))
+            sys.exit(1)
+        return
     if args.komento in ("aja", "yo"):
         run_jobs(args.kuiva)
         if args.komento == "aja" or args.kuiva:
