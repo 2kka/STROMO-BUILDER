@@ -137,7 +137,8 @@ def variants():
 
 def index_runs():
     runs = {}
-    for config_path in RUNS.glob("*/config.json"):
+    # Yksittäisajot: runs/<ajo>/config.json; yhteisajot: runs/<erä>/<variantti>/config.json
+    for config_path in [*RUNS.glob("*/config.json"), *RUNS.glob("*/*/config.json")]:
         try:
             config = json.loads(config_path.read_text())
         except (OSError, ValueError):
@@ -656,6 +657,55 @@ def jobs(vs, rows, runs, state):
     return sorted(out, key=lambda j: order[j[0]])
 
 
+# ---------- yhteisajo (omistaja 4.11. klo 23.44) ----------
+
+ERA_KOOT = 60  # enintään näin monta varianttia yhteen kauppakierrokseen
+ERALLISET = {"valitarkistus", "treenileiri", "kausi"}
+TUNNISTIMET = {"hintahyppy", "volyymi_normaaliin", "cvd_kaanto", "cvd_paine", "momentum", "regiimi",
+               "spreadi_normaaliin", "syvyys_normaaliin"}
+
+
+def rhythm_class(v):
+    """Nopean polun luokka: erään vain samaa luokkaa (sekaerä putoaa hitaalle polulle)."""
+    for node in ast.parse(v["file"].read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", None) == "EHDOT":
+            try:
+                ehdot = ast.literal_eval(node.value)
+            except ValueError:
+                return "python"
+            if not isinstance(ehdot, dict):
+                return "python"
+            kinds = {c.get("palikka") for c in ehdot.values() if isinstance(c, dict)}
+            return "tunnistin" if kinds & TUNNISTIMET else "deklaratiivinen"
+    return "python"
+
+
+def period_of(cmd):
+    return (cmd[cmd.index("--start") + 1], cmd[cmd.index("--end") + 1]) if "--start" in cmd else None
+
+
+def batch_group(todo):
+    """Jonon ensimmäisen kanssa samaa vaihetta, jaksoa ja rytmiluokkaa olevat ajot (jonon järjestyksessä)."""
+    kind, v, cmd = todo[0]
+    if kind not in ERALLISET:
+        return [todo[0]]
+    period, cls = period_of(cmd), rhythm_class(v)
+    group = [(k, w, c) for k, w, c in todo
+             if k == kind and period_of(c) == period and rhythm_class(w) == cls]
+    return group[:ERA_KOOT]
+
+
+def batch_cmd(kind, group, dry=False):
+    stamp = datetime.now().strftime("%m%d%H%M%S")
+    start, end = period_of(group[0][2])
+    spec = [{"id": w["id"], "stromo-file": str(w["file"].resolve()), "params": w["params"]} for _, w, _ in group]
+    path = TILA / "erat" / f"{kind}-{stamp}.json"
+    if not dry:
+        atomic_write(path, spec)
+    return UV + ["research.replay", "--batch", str(path), "--pair", SAANNOT["pari"], "--start", start,
+                 "--end", end, "--output", str(RUNS / f"liiga-era-{kind}-{stamp}")]
+
+
 def run_jobs(dry):
     if dry:
         return run_queue(dry)
@@ -692,18 +742,26 @@ def run_queue(dry):
                 queue_done_event(vs, rows, runs, started)
             return
         kind, v, cmd = todo[0]
+        group = batch_group(todo)
+        if len(group) > 1:
+            cmd = batch_cmd(kind, group, dry)
         cmd = with_power(cmd)
         if dry:
             print(f"{datetime.now():%H.%M} teho {control()['teho']}")
-            for kind, v, cmd in todo:
-                print(f"  {kind:12} {' '.join(with_power(cmd))}")
+            if len(group) > 1:
+                print(f"  yhteisajo {kind}: {len(group)} varianttia → {' '.join(cmd)}")
+            for kind_, v_, cmd_ in todo[len(group):] if len(group) > 1 else todo:
+                print(f"  {kind_:12} {' '.join(with_power(cmd_))}")
             return
         atomic_write(RUNNING, {
             "tyyppi": kind, "id": v["id"], "stromo": v["stromo"], "ajo": output_of(cmd),
             "alkoi": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "vaihe": STAGE_OF_JOB[kind], "teho": control()["teho"],
+            "era": [w["id"] for _, w, _ in group] if len(group) > 1 else None,
+            "stromot": sorted({w["stromo"] for _, w, _ in group}),
         })
-        print(f"{datetime.now():%H.%M} {kind}: {v['id']}", flush=True)
+        print(f"{datetime.now():%H.%M} {kind}: {v['id']}"
+              + (f" + {len(group) - 1} muuta yhteisajona" if len(group) > 1 else ""), flush=True)
         if kind == "tryout":
             proc = subprocess.run(cmd, capture_output=True, text=True)
             try:
@@ -1174,7 +1232,7 @@ def stromo_views(vs, rows, runs, state, ctl=None):
             view |= {"kategoria": "valmis"}
         elif block or (allowed < 0 and not own):
             view |= {"kategoria": "prospekti", "palikka": block}
-        elif running and running.get("stromo") == s:
+        elif running and s in (running.get("stromot") or [running.get("stromo")]):
             view |= {"kategoria": "ajossa", "vaihe": running.get("vaihe")}
         elif need is not None and need > allowed:
             view |= {"kategoria": "odottaa", "lapi": SIIRROT[need - 1] if need else None,
