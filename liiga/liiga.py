@@ -199,6 +199,17 @@ def tryout_file(v):
     return TILA / "tryout" / f"{v['id']}-{v['sha256'][:12]}.json"
 
 
+def neighbor_sign(rows, n):
+    """Naapurin tila: True = Treenileirillä plussalla, False = miinuksella tai pudonnut
+    (Try out / välitarkistus), None = vielä kesken tai ohitettu naapurin takia."""
+    nr = last(rows, "treenileiri", n)
+    if nr:
+        return nr["tulos"]["reuna"] is not None and nr["tulos"]["reuna"] > 0
+    if any((x := last(rows, ev, n)) and not x["lapaisy"] for ev in ("valitarkistus", "tryout")):
+        return False
+    return None
+
+
 def evaluate(vs, rows, runs):
     """Päivittää tilastot valmiiden ajojen perusteella ja palauttaa tilan per variantti."""
     t = SAANNOT["treenileiri"]
@@ -257,6 +268,17 @@ def evaluate(vs, rows, runs):
                     "syyt": reasons,
                 },
             )
+    # 3.1d: kun yksikin saman stromon variantti on jo miinuksella tai karsittu, kukaan
+    # sen naapureista ei voi enää läpäistä naapurisääntöä -> keskeneräisiä ei ajeta.
+    doomed = {v["stromo"] for v in vs if neighbor_sign(rows, v) is False}
+    for v in vs:
+        if (
+            v["stromo"] in doomed
+            and not last(rows, "treenileiri", v)
+            and neighbor_sign(rows, v) is None
+            and (to := last(rows, "tryout", v)) and to["lapaisy"]
+        ):
+            record(rows, {**base_row(v, "ohitus"), "lapaisy": False, "syy": "naapuri karsittu"})
     # Naapurisääntö ja ylennys (enintään max_jatkoon per arviointi, suurin reuna/kynnys)
     candidates = []
     for v in vs:
@@ -265,15 +287,7 @@ def evaluate(vs, rows, runs):
             continue
         others = [n for n in vs if n["stromo"] == v["stromo"] and n is not v]
         # Naapurin tila: reuna Treenileiriltä, tai välitarkistuksessa / Try outissa pudonnut = ei plussalla.
-        signs = []
-        for n in others:
-            nr = last(rows, "treenileiri", n)
-            if nr:
-                signs.append(nr["tulos"]["reuna"] is not None and nr["tulos"]["reuna"] > 0)
-            elif any((x := last(rows, ev, n)) and not x["lapaisy"] for ev in ("valitarkistus", "tryout")):
-                signs.append(False)
-            else:
-                signs.append(None)  # vielä kesken
+        signs = [neighbor_sign(rows, n) for n in others]
         if others and all(sg is True for sg in signs):
             candidates.append((row["tulos"]["reuna"] / row["tulos"]["kynnys"], v))
         elif others and False in signs:
@@ -374,6 +388,8 @@ def stage_of(rows, v):
     vt = last(rows, "valitarkistus", v)
     if not tr and vt and not vt["lapaisy"]:
         return "Treenileiri", "karsittu välitarkistuksessa: " + ", ".join(vt["syyt"])
+    if not tr and last(rows, "ohitus", v):
+        return "Treenileiri", "ei voi edetä: naapuri karsittu"
     if not tr:
         return "Treenileiri", "odottaa" if vt else "odottaa välitarkistusta"
     if tr["syyt"]:
