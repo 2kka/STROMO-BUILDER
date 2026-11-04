@@ -19,6 +19,7 @@ EHDOT = {
     "Kolmas tukitesti, 2× volyymi": {
         "palikka": "kolmas_tukitesti_vol2",
         "kosketuskaista_pct": "$kosketuskaista_pct",
+        "suunta": "down",
         "tyyppi": "tapahtuma",
         "voimassa_s": 300,
         "paa": True,
