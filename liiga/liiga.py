@@ -256,6 +256,24 @@ def neighbor_sign(rows, n):
     return None
 
 
+def run_ref(path):
+    """Ajon polku runs-kansiosta (yhteisajossa erä/variantti)."""
+    try:
+        return Path(path).relative_to(RUNS).as_posix()
+    except ValueError:
+        return Path(path).name
+
+
+def tl_run_dir(runs, v, tr):
+    """Treenileirin ajokansio: tilastorivin polku, tai vanhalla rivillä (pelkkä nimi) haku ajoista."""
+    direct = RUNS / tr["ajo"]
+    if (direct / "config.json").exists():
+        return direct
+    t = SAANNOT["treenileiri"]
+    path, _ = find_run(runs, v, t["alku"], t["loppu"])
+    return path if path is not None else direct
+
+
 def evaluate(vs, rows, runs):
     """Päivittää tilastot valmiiden ajojen perusteella ja palauttaa tilan per variantti."""
     t = SAANNOT["treenileiri"]
@@ -290,7 +308,7 @@ def evaluate(vs, rows, runs):
                 reasons.append("ei suuntaa")
             record(
                 rows,
-                {**base_row(v, "valitarkistus"), "lapaisy": not reasons, "syyt": reasons, "ajo": path.name,
+                {**base_row(v, "valitarkistus"), "lapaisy": not reasons, "syyt": reasons, "ajo": run_ref(path),
                  "tulos": {**m, "reuna": e}},
             )
     # Treenileiri
@@ -311,7 +329,7 @@ def evaluate(vs, rows, runs):
                 rows,
                 {
                     **base_row(v, "treenileiri"),
-                    "ajo": path.name,
+                    "ajo": run_ref(path),
                     "tulos": {**m, "osuma": win, "verrokki": base, "reuna": e, "kynnys": threshold},
                     "syyt": reasons,
                     "seula": seula(),
@@ -333,7 +351,7 @@ def evaluate(vs, rows, runs):
     for v in vs:
         tr = last(rows, "treenileiri", v)
         if promoted(rows, v, vs) and not last(rows, "dopingtesti", v):
-            f = RUNS / tr["ajo"] / "tappotestit.json"
+            f = tl_run_dir(runs, v, tr) / "tappotestit.json"
             if f.exists():
                 tests = json.loads(f.read_text()).get("testit", {})
                 for event, names in (("dopingtesti", DOPING), ("kuntopuntari", KUNTO)):
@@ -641,7 +659,7 @@ def jobs(vs, rows, runs, state):
             if not Path("research/tappotestit.py").exists():
                 continue  # työkalu (3.1b) puuttuu vielä
             out.append(("dopingtesti", v, UV + [
-                "research.tappotestit", str(RUNS / tr["ajo"]), "--kulut-pct", SAANNOT["dopingtesti"]["kulut_pct"],
+                "research.tappotestit", str(tl_run_dir(runs, v, tr)), "--kulut-pct", SAANNOT["dopingtesti"]["kulut_pct"],
             ]))
         elif stage == "Kausi" and status == "odottaa":
             for i, (start, end) in enumerate(k["kaudet"], 1):
