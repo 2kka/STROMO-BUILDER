@@ -1,20 +1,22 @@
-# Alueen keskikohdan palautus ▲
+# Alueen keskikohdan palautus ▲▼
 
 **Tekijä:** gpt · **Päivä:** 2026-11-04
 **Tyyppi:** tutkimusstromo (LIIGA)
 **Pari:** OKX BTC-USDT
 
 ## Hypoteesi
-- **Mekanismi:** Lyhyen kaupankäyntialueen alaosaan jäänyt hinta voi palata kohti alueen keskikohtaa ilman että kyse on voimakkaasta uupumussignaalista. Jos minuutin sulku ylittää aiemman alueen keskipisteen normaalilla tai tavallista pienemmällä volyymilla, yksittäinen voimakas impulssi ei selitä koko palautusta. Hypoteesi koskee alueen sisäistä uudelleenhinnoittelua, ei ääriliikkeen vastakauppaa.
-- **Suunta:** ▲; ylitys alapuolelta alueen keskikohdan yläpuolelle.
-- **Miksi ei pelkkä volatiliteetti:** Keskeinen tapahtuma sidotaan edeltävän hinta-alueen korkeimman ja matalimman keskiarvoon, eikä vaadita poikkeuksellisen suurta liikettä; volyymille asetetaan yläraja.
-- **Aikajänne:** Seuraavat 10–60 min; 3A ratkaisee +sigma15 vastaan −sigma15 ensimmäisen kosketuksen 60 minuutissa.
+- **Mekanismi:** Lyhyen kaupankäyntialueen reunapuolelle siirtynyt hinta voi palata alueen keskikohdan yli tai ali, kun hinta arvioidaan uudelleen ilman voimakasta yksittäistä volyymiryöppyä. Suljetun minuutin keskipisteen ylitys alhaalta tai alitus ylhäältä on selkeä, molemmille puolille samaa logiikkaa noudattava tapahtuma. Hypoteesi koskee alueen sisäistä uudelleenhinnoittelua, ei kierroksen 1 uupumusstromon uudelleensäätöä.
+- **Suunta:** **▲** jos 1m close ylittää aiemman alueen keskikohdan alhaalta, **▼** jos se alittaa sen ylhäältä. Pääehdon murtosuunta kirjataan kullekin hälytykselle; molemmat kuuluvat samaan stromoon ja samoihin parametritesteihin.
+- **Miksi ei pelkkä volatiliteetti:** Vertailutaso on vain menneistä high/low-hinnoista laskettu keskipiste ja 5m volyymille asetetaan yläraja; suuren liikkeen tunnistin ei riitä.
+- **Aikajänne:** Seuraavat 10–60 min; 3A vertailee suunnassa ▲ (+sigma15 ennen −sigma15) tai suunnassa ▼ (−sigma15 ennen +sigma15) 60 minuutin sisällä.
 
 ## Ehdot
 | Nimi | Palikka | Asetukset | Tyyppi | Pääehto | Voimassa / hystereesi |
 |---|---|---|---|---|---|
-| Alueen keskipisteen ylitys | Uusi: aluekeskipisteen ylitys | Aiemman alue_s:n (2700/3600/5400 s) suljettujen 1 min high/low-hintojen keskipiste; edellinen 1m close ≤ keskipiste ja nykyinen 1m close > sama keskipiste | tapahtuma | kyllä | voimassa_s = 120 s |
-| Ei volyymiryöppyä | sum(volume, 300 s) vs percentile | 60 s BTC-volyymi; 5 min summa ≤ saman summalähteen 24 h p75 | ehto | ei | — |
+| Aluekeskipisteen ylitys/alitus ▲/▼ | Uusi: kaksisuuntainen aluekeskipisteen leikkaus | Edeltävän alue_s:n (2700/3600/5400 s) suljettujen 1m high/low-minuuttien keskipiste **M** (laukaiseva minuutti pois). ▲: edellinen 1m close ≤ M ja uusi > M. ▼: edellinen ≥ M ja uusi < M. Molemmissa **sama ennen laukaisua lukittu M**. | tapahtuma | kyllä | voimassa_s = 120 s |
+| Ei volyymiryöppyä | sum(volume, 300 s) vs percentile | 60 s BTC-volyymi; 5 min summa ≤ saman summalähteen 24 h p75, sama ehto molemmille suunnille | ehto | ei | — |
+
+**Suunnan sidonta ja LIIGA:** Leikkaustapahtuma tuottaa ▲/▼, jonka 3A saa samasta hälytyksestä; se ei saa merkitä kaikkia hälytyksiä ▲:ksi eikä valita jälkikäteen parempaa puolta. Ehtoarvot otetaan viimeisistä suljetuista näytteistä, eikä `M` muutu kesken yhden ylityksen/alituksen tarkistuksen. Kaksisuuntaisuus ei kaksinkertaista yhden instanssin cooldown-kiintiötä: cooldown_seconds = 7200 s on yhteinen. Raportoi myös suuntien tulokset erikseen, mutta arvioi sama etukäteen lukittu stromo ja naapurit LIIGAn sääntöjen mukaan.
 
 ## Parametrit ja naapurit
 | Parametri | Oletus | Naapurit | Miksi tämä alue |
@@ -24,13 +26,13 @@
 Enintään kaksi säädettävää; tutkimusstromon naapurit on lukittu ennen yhtään ajoa.
 
 ## Tarvittavat uudet palikat
-- **Aluekeskipisteen ylitys:** laskee edeltävän (laukaisevan minuutin pois jättävän) alue_s:n suljettujen 60 s high-arvojen maksimin ja low-arvojen minimin puolivälin sekä tarkistaa, ylittääkö viimeisin suljettu 1m close sen alhaalta. Käyttää vain historiassakin olevaa kauppavirtaa (close, high, low, UTC-minuutit); ei katso tulevaan. Ei muita uusia palikoita.
+- **Kaksisuuntainen aluekeskipisteen leikkaus:** laskee laukaisua edeltävän `alue_s`-jakson 60 s high-maksimin ja low-minimin puolivälin `M`. Vertaa edellistä ja juuri sulkeutunutta 1m closea **samaan M-arvoon** ja julkaisee ensimmäisestä leikkauksesta suunnan ▲/▼. Käyttää vain historiassa ja livessä olevaa kauppavirtaa (close/high/low, UTC-minuutit); ei tulevia tietoja. Tämä laajentaa alkuperäisen yksisuuntaisen palikkatarpeen kaksisuuntaiseksi; ei muita uusia palikoita.
 
 ## Odotettu tiheys
-- Etukäteisarvio 1–8 hälytystä/vrk; keskipisteen alhaalta ylitys on tapahtuma, jota p75-volyymikatto rajaa. Kiinteä cooldown_seconds = 7200 s pitää enimmäismäärän 12:ssa/24 h. LIIGAn ≥ 100 rypään vaatimus jää todistettavaksi.
+- Etukäteisarvio 2–12 hälytystä/vrk **molemmat suunnat yhteensä**; keskipisteen leikkaus ja p75-volyymikatto rajaavat osumia. Yhteinen cooldown_seconds = 7200 s rajaa enintään noin 12 kultaan/24 h. LIIGAn ≥ 100 rypään vaatimus 9 kuukaudessa jää todistettavaksi.
 
 ## Kumoava koe
-- Jos keskipisteylityksen jälkeen 3A:n ▲-osuma ei ylitä verrokkeja tai reuna katoaa sigma15-/kellonaikatäsmäyksessä, kyseessä ei ole suunnallisesti käyttökelpoinen palautus. Myös naapurialueiden ≤ 0 reunat kumoavat robustiuden.
+- Jos 3A:n suunnan mukainen ▲/▼-osumien yhdistetty reuna ei ylitä satunnaisia tai sigma15-/kellonaikatäsmättyjä verrokkeja, hypoteesi ei saa tukea. Jos toinen suunta on systemaattisesti negatiivinen tai 2700/5400 s naapurit eivät ole samansuuntaisesti positiivisia, kaksisuuntaisuuden perusteltavuutta pitää arvioida ilman jälkikäteistä puolen valikointia.
 
 ## Avoimet kysymykset
-- Riittääkö pelkkä edeltävän alueen puoliväli mielekkääksi vertailutasoksi vai onko tapahtumia liian usein sivuttaisliikkeessä? Tätä ei ratkaista katsomalla kehitysdataa ennen lukitusta.
+- Riittääkö edeltävän alueen puoliväli, vai syntyykö liikaa sahaavia leikkauksia? Kumpaakin suuntaa tarkastellaan saman ennalta lukitun määrittelyn osana; kehitysdataa ei käytetä puolten tai rajojen valintaan.

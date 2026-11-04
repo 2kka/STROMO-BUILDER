@@ -1,20 +1,22 @@
-# Peräkkäisten sulkujen askellus ▲
+# Peräkkäisten sulkujen askellus ▲▼
 
 **Tekijä:** gpt · **Päivä:** 2026-11-04
 **Tyyppi:** tutkimusstromo (LIIGA)
 **Pari:** OKX BTC-USDT
 
 ## Hypoteesi
-- **Mekanismi:** Hitaasti ostava osallistuja voi jakaa toimeksiantonsa useaan minuuttierään sen sijaan, että ostaisi yhdellä purskeella. Jos useat peräkkäiset suljetut minuutit päätyvät aina edellistä ylemmäs ja kauppojen määrä on keskimääräistä vilkkaampi, pienet positiiviset hintamuutokset voivat jatkua ilman yksittäistä rajua hyppyä. Tämä on etukäteen asetettu jatkuvuushypoteesi.
-- **Suunta:** ▲; jokainen hälytys arvioidaan ylöspäin.
-- **Miksi ei pelkkä volatiliteetti:** Vaatii jokaiselta peräkkäiseltä minuutilta positiivisen sulkutuoton (ei vain suuren kokonaisliikkeen) sekä lukumääräisen osallistumisen suhteessa omaan jakaumaan.
-- **Aikajänne:** Seuraavat 15–60 min; 3A mittaa 60 minuutin sisällä +sigma15- ja −sigma15-kosketusten järjestyksen.
+- **Mekanismi:** Hitaasti ostava tai myyvä osallistuja voi jakaa toimeksiantonsa peräkkäisiin minuuttieriin yhden purskeen sijasta. Usean suljetun minuutin johdonmukainen nousu (▲) tai lasku (▼) yhdessä tavanomaista suuremman kauppatapahtumien määrän kanssa voi kuvata jatkuvaa osallistumista ilman yksittäistä hintahyppyä. Kyse on etukäteen muodostetusta jatkuvuushypoteesista, ei tunnetusta ennusteesta.
+- **Suunta:** **▲** kun kaikki peräkkäiset 1 minuutin log-tuotot ovat > 0; **▼** kun kaikki ovat < 0. Merkki lasketaan pääehdosta ja annetaan jokaiselle hälytykselle, ei erillistä long-/short-parametria.
+- **Miksi ei pelkkä volatiliteetti:** Vaatii samanmerkkisten peräkkäisten minuuttisulkujen sarjan sekä 24 h omaan jakaumaan verratun kauppalukumäärän; suuri kokonaisliike ei yksin riitä.
+- **Aikajänne:** Seuraavat 15–60 min; 3A mittaa ▲-hälytyksestä +sigma15 ennen −sigma15 ja ▼-hälytyksestä −sigma15 ennen +sigma15, 60 minuutissa.
 
 ## Ehdot
 | Nimi | Palikka | Asetukset | Tyyppi | Pääehto | Voimassa / hystereesi |
 |---|---|---|---|---|---|
-| Yhtämittainen askellus | min(log_change(close, 60 s), askellus_s) | 60 s sulut; jokaisen viimeisen askellus_s-jakson 1 min log-tuotto > 0; askellus_s = 120/180/240 s | tapahtuma | kyllä | voimassa_s = 60 s |
-| Osallistuminen | sum(count, askellus_s) vs percentile | 60 s count; viimeisen askellus_s:n kauppojen summa ≥ oman 24 h historian p70 samalla lähteellä | ehto | ei | — |
+| Yhtämittainen askellus ▲/▼ | min ja max 1m log-tuottoikkunasta; suunnattu tapahtuma | Suljetut 60 s close-arvot; `r = log_change(close, 60 s)`. Viimeisen askellus_s:n (120/180/240 s) `min(r) > 0` = ▲, **tai** `max(r) < 0` = ▼. Merkki tunnistetaan False→True-muutoksesta suuntakohtaisesti. | tapahtuma | kyllä | voimassa_s = 60 s |
+| Osallistuminen | sum(count, askellus_s) vs percentile | 60 s count; viimeisen askellus_s:n summa ≥ saman summalähteen 24 h p70, sama kynnys kummallekin merkille | ehto | ei | — |
+
+**Suunnan sidonta ja LIIGA:** Pääehto palauttaa ▲/▼ yksikäsitteisesti; min > 0 ja max < 0 eivät voi olla samanaikaisesti tosia. Kulta tarvitsee osallistumisehdon lisäksi **tämän** pääehdon suunnan; 3A arvioidaan tapahtumamerkin suuntaan. Yhteinen cooldown_seconds = 5400 s koskee molempia, ei kahta erillistä stromo-instanssia. Naapurit 120/240 s ovat samat sekä ▲- että ▼-puolella; raportoi kummankin suunta erikseen ilman tulosten perusteella tapahtuvaa puolen valintaa.
 
 ## Parametrit ja naapurit
 | Parametri | Oletus | Naapurit | Miksi tämä alue |
@@ -24,13 +26,13 @@
 Enintään kaksi säädettävää; tutkimusstromon naapurit on lukittu ennen yhtään ajoa.
 
 ## Tarvittavat uudet palikat
-- Ei uusia. Käytetään 60 s close- ja count-sarjoja, window-operaatioita ja 24 h liukuvaa persentiiliä.
+- Uutta kauppadatasarjaa ei tarvita: 60 s close/count, `log_change`, `min`, `max`, `sum` ja `percentile` riittävät. **Suunnattu askellustapahtuma** on näistä koostettava pieni kaksisuuntainen vertailupalikka (tai 2.H-e:n suunnattu OR-kooste), joka palauttaa merkin ▲/▼ ja False→True-tapahtuman. Jos deklaratiivinen moottori ei tue suunnan palautusta olemassa olevista palikoista, tämä johdettu palikka on lisättävä; lasketaan vain suljetuista kauppaminuuteista.
 
 ## Odotettu tiheys
-- Etukäteisarvio 2–12 kultahälytystä/vrk; peräkkäiset positiiviset minuutit ja p70-kauppalukumäärä rajaavat tilanteita. Kiinteä cooldown_seconds = 5400 s antaa enintään 16 hälytystä/24 h (Try out ≤ 200, Treenileiri ≤ 20). Vähintään 100 rypästä 9 kk:ssa on tavoite, ei oletettu tulos.
+- Etukäteisarvio 3–14 kultahälytystä/vrk molemmat suunnat yhteensä; peräkkäiset samanmerkkiset minuutit ja p70-kauppalukumäärä rajaavat tapauksia. Yhteinen cooldown_seconds = 5400 s rajaa enintään 16 kultaan/24 h (Try out ≤ 200, Treenileiri ≤ 20). LIIGAn ≥ 100 rypästä 9 kk:ssa on tavoite, ei oletettu tulos.
 
 ## Kumoava koe
-- Jos 3A-reuna on ≤ 0 satunnaisiin tai sigma15:n ja UTC-kellonajan mukaan täsmättyihin verrokkeihin verrattuna tai 120/240 s -naapurit eivät osoita samaa suuntaa, askellus ei täytä LIIGAn hypoteesia.
+- Jos 3A:n molempiin suuntiin oikein merkitty yhdistetty reuna on ≤ 0 satunnaisiin tai sigma15-/kellonaikatäsmättyihin verrokkeihin nähden, jatkuvuushypoteesi ei saa tukea. Jos 120/240 s -naapurit eivät pysy samaan suuntaan tai toinen hälytyssuunta heikentää tulosta, sitä ei saa jälkikäteen poistaa saman testin puitteissa.
 
 ## Avoimet kysymykset
-- Peräkkäisten sulkujen ehdon False→True pitää arvioida vain uusilla suljetuilla 60 s näytteillä; kesken minuutin kauppahintaa ei saa käyttää.
+- Tarkista, että False→True muodostuu vain **uusista suljetuista 60 s** minuuteista, eikä sama 60 s tapahtuma säily vanhana seuraavaan päätökseen. Suuntien tulosten erittely on diagnostiikkaa, ei peruste muuttaa lukittua kaksisuuntaista korttia.
