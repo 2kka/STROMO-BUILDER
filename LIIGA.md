@@ -41,7 +41,16 @@ python3 ~/stromo-builder/liiga/liiga.py yo           # aja + raportti + vie yhde
 johon se on siirretty: läpäisyn jälkeen se jää odottamaan seuraavaa siirtoa (Try out →
 Treenileiri → Dopingtesti (+ Kuntopuntari) → Kausi → Playoffit). Karsinta tapahtuu edelleen
 tulosten perusteella, ja kuollut stromo menee hautausmaalle. LIIGA ei käynnisty itsestään:
-omistaja painaa Aja (teho kevyt/täysi). Puuttuva palikka palauttaa stromon prospekteihin
+omistaja painaa Aja (teho kevyt/täysi).
+
+**Seula (omistaja 4.11.2026):** läpäisy lasketaan raakaluvuista voimassa olevalla seulalla
+(`liiga.py seula iso_kampa|normaali|tiukka|oma`, `liiga.py seula-arvo <säädin> <arvo>`).
+Iso kampa (oletus): ei aikaista karsintaa, Treenileirin raja 1 keskivirhe, min 30 rypästä,
+naapurisääntö enemmistö. Normaali = aiempi LIIGA (2 keskivirhettä = 100/√rypäät, min 100,
+kaikki naapurit, välitarkistus karsii). Tiukka: 3 keskivirhettä, Kausi α 1 %. Raakaluvut ja
+ajon aikainen seula tallentuvat aina; tulosten jälkeen muutettu seula merkitsee tuloksen
+"jälkisäädetty". Sattumamittari: testattu N × sattumaläpäisy vs toteutunut. Kiintiö
+(max_jatkoon) poistui, koska omistaja siirtää vaiheet käsin. Playoffit eivät ole säädettävissä. Puuttuva palikka palauttaa stromon prospekteihin
 ("odottaa palikkaa"), eikä se kuole. Yöajo ajaa vain ajojonossa olevat.
 
 **Yöajo:** `liiga/yoajo.sh` (Windowsin tehtävänajastin käynnistää, ks. alla). Se ohittaa
