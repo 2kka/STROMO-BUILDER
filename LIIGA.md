@@ -35,9 +35,14 @@ python3 ~/stromo-builder/liiga/liiga.py paketti uupumus   # tiivistelmä leikep�
 python3 ~/stromo-builder/liiga/liiga.py yo           # aja + raportti + vie yhdellä kertaa
 ```
 
-**Uudet stromot tulevat mukaan itsestään:** kun stromotiedosto on mergetty mainiin
-(= lukittu), seuraava ajo poimii sen Try outiin. Jokainen variantti siirtyy vaiheesta
-toiseen tulostensa perusteella; kukaan ei siirrä niitä käsin.
+**LIIGA 2 – omistaja ohjaa selaimesta (4.11.2026 alkaen):** mergetty stromo on
+**prospekti**, kunnes omistaja siirtää sen ajojonoon (liiga.stromo.uk tai `liiga.py siirra
+<tekijä/nimi>`). Stromo kulkee kaikkine variantteineen ja ajetaan vain siihen vaiheeseen,
+johon se on siirretty: läpäisyn jälkeen se jää odottamaan seuraavaa siirtoa (Try out →
+Treenileiri → Dopingtesti (+ Kuntopuntari) → Kausi → Playoffit). Karsinta tapahtuu edelleen
+tulosten perusteella, ja kuollut stromo menee hautausmaalle. LIIGA ei käynnisty itsestään:
+omistaja painaa Aja (teho kevyt/täysi). Puuttuva palikka palauttaa stromon prospekteihin
+("odottaa palikkaa"), eikä se kuole. Yöajo ajaa vain ajojonossa olevat.
 
 **Yöajo:** `liiga/yoajo.sh` (Windowsin tehtävänajastin käynnistää, ks. alla). Se ohittaa
 yön, jos jokin ajo on jo käynnissä, ja kirjoittaa lokiin `data/research/liiga/yoajo.log`.

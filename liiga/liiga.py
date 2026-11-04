@@ -18,6 +18,16 @@ Etäohjaus (palvelimen liiga.stromo.uk SSH:n pakotetun komennon liiga/liiga-ohja
     liiga.py kaynnista | pysayta    # aja-silmukka taustalle / SIGINT sille ja käynnissä olevalle ajolle
     liiga.py jono-ensin|jono-ohita|jono-palauta <variantti>   # omistajan järjestys, data/research/liiga/jono.json
 
+LIIGA 2 (selainohjaus, STROMO4_liiga2_maarittely.md): stromo kulkee kaikkine variantteineen,
+ja omistaja siirtää sen vaihe kerrallaan. Ilman siirtoa mitään ei ajeta.
+
+    liiga.py hae                     # builder mainista; STROMO4-tutkimuskansio + uv sync vain, kun LIIGA ei aja
+    liiga.py tila2                   # koneluettava tila, versio 2 (prospektit, ajojono, odottavat, hautausmaa…)
+    liiga.py siirra|palauta|ylos|alas gpt/utc_paivanvaihde
+    liiga.py teho kevyt|taysi        # 4 prosessia / ytimet − 2 (koskee replay-ajoja)
+    liiga.py playoffit X --vahvista X   # omistaja avaa koskemattoman jakson; ajetaan seuraavalla Aja-painalluksella
+    Tapahtumat (data/research/liiga/tapahtumat.jsonl) liven Lokiin ja Telegramiin palvelimen kautta.
+
 Vain standardikirjasto. LIIGA ei koskaan avaa koskematonta jaksoa (Playoffit):
 se tulostaa omistajalle valmiin komennon. Tulokset luetaan ajojen config.json-
 tiedostoista, joten valmiita ajoja (myös kierroksen 1 k1-ajot) ei ajeta uudelleen.
@@ -49,8 +59,9 @@ RUNNING = TILA / "kaynnissa.json"
 LOCK = TILA / "aja.lock"
 PIDFILE = TILA / "aja.pid"
 STAGE_OF_JOB = {"tryout": "Try out", "valitarkistus": "Treenileiri", "treenileiri": "Treenileiri",
-                "dopingtesti": "Dopingtesti", "kausi": "Kausi"}
-ARVIO_S = {"tryout": 90, "valitarkistus": 180, "treenileiri": 600, "dopingtesti": 120, "kausi": 1200}
+                "dopingtesti": "Dopingtesti", "kausi": "Kausi", "playoffit": "Playoffit"}
+ARVIO_S = {"tryout": 90, "valitarkistus": 180, "treenileiri": 600, "dopingtesti": 120, "kausi": 1200,
+           "playoffit": 600}
 CLUSTER_MS = 60 * 60_000
 VAIHEET = ["Try out", "Treenileiri", "Dopingtesti", "Kuntopuntari", "Kausi", "Playoffit", "Näytösottelu"]
 # Tappotestit (research.tappotestit) jaetaan kahteen vaiheeseen:
@@ -79,6 +90,20 @@ def enum_choices(source):
     raise ValueError("PARAMETRIT puuttuu")
 
 
+def stromo_meta(source):
+    """NIMI ja SELITYS stromotiedostosta (ei suoriteta)."""
+    meta = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            name = getattr(node.targets[0], "id", None)
+            if name in ("NIMI", "SELITYS"):
+                try:
+                    meta[name.lower()] = ast.literal_eval(node.value)
+                except ValueError:
+                    pass
+    return meta
+
+
 def variants():
     result = []
     for path in sorted((BUILDER / "stromot").glob("*/*.py")):
@@ -87,6 +112,7 @@ def variants():
         source = path.read_text(encoding="utf-8")
         sha = hashlib.sha256(source.encode()).hexdigest()
         choices = enum_choices(source)
+        meta = stromo_meta(source)
         keys = sorted(choices)
         for combo in itertools.product(*(choices[k] for k in keys)) if keys else [()]:
             params = dict(zip(keys, combo))
@@ -99,6 +125,8 @@ def variants():
                     "sha256": sha,
                     "params": params,
                     "id": f"{name.replace('/', '-')}-{tag}",
+                    "nimi": meta.get("nimi", name),
+                    "selitys": meta.get("selitys", ""),
                 }
             )
     return result
@@ -236,6 +264,8 @@ def evaluate(vs, rows, runs):
         f = tryout_file(v)
         if f.exists() and not last(rows, "tryout", v):
             result = json.loads(f.read_text())
+            if missing_block(result):
+                continue  # puuttuva palikka ei karsi: stromo odottaa STROMO4:n päivitystä
             cap = SAANNOT["tryout"]["max_halytykset"]
             ok = result.get("ok", False) and result.get("alerts_per_day", 0) <= cap
             record(rows, {**base_row(v, "tryout"), "lapaisy": ok, "tulos": result})
@@ -460,6 +490,8 @@ def jobs(vs, rows, runs, state):
     for v in vs:
         stage, status = state[v["id"]]
         if stage == "Try out" and status == "odottaa":
+            if waiting_block(v):
+                continue
             out.append(("tryout", v, UV + [
                 "research.check_stromo", str(v["file"]), "--json",
                 "--day", SAANNOT["tryout"]["paiva"], "--pair", SAANNOT["pari"],
@@ -484,7 +516,12 @@ def jobs(vs, rows, runs, state):
                 path, _ = find_run(runs, v, start, end)
                 if not path:
                     out.append(("kausi", v, replay_cmd(v, start, end, f"liiga-k{i}-{v['id']}")))
-    order = {"tryout": 0, "valitarkistus": 1, "treenileiri": 2, "dopingtesti": 3, "kausi": 4}
+        elif (stage, status) == ("Playoffit", "odottaa omistajaa") and v["stromo"] in playoff_opened():
+            p = SAANNOT["playoffit"]
+            if not find_run(runs, v, p["alku"], p["loppu"])[0]:
+                out.append(("playoffit", v, replay_cmd(v, p["alku"], p["loppu"], f"liiga-po-{v['id']}")
+                            + ["--open-holdout", "--reason", "LIIGA Playoffit (omistaja avasi selaimesta)"]))
+    order = {"tryout": 0, "valitarkistus": 1, "treenileiri": 2, "dopingtesti": 3, "kausi": 4, "playoffit": 5}
     return sorted(out, key=lambda j: order[j[0]])
 
 
@@ -509,25 +546,33 @@ def run_jobs(dry):
 
 
 def run_queue(dry):
+    """LIIGA 2: ajetaan vain omistajan ajojonoon siirtämien stromojen sallitut vaiheet, jonon järjestyksessä."""
+    ran = 0
+    started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     while True:
         vs, rows, runs = variants(), read_ledger(), index_runs()
         state = evaluate(vs, rows, runs)
-        todo = [j for j in apply_queue(jobs(vs, rows, runs, state)) if not j[3]]
+        if not dry:
+            sync_events(vs, rows, runs, state)
+        todo = allowed_jobs(vs, rows, runs, state)
         if not todo:
             print("Jono tyhjä.")
+            if ran and not dry:
+                queue_done_event(vs, rows, runs, started)
             return
-        kind, v, cmd, _ = todo[0]
-        if not dry:
-            atomic_write(RUNNING, {
-                "tyyppi": kind, "id": v["id"], "ajo": output_of(cmd),
-                "alkoi": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "vaihe": STAGE_OF_JOB[kind],
-            })
-        print(f"{datetime.now():%H.%M} {kind}: {v['id']}", flush=True)
+        kind, v, cmd = todo[0]
+        cmd = with_power(cmd)
         if dry:
-            for kind, v, cmd, _ in todo:
-                print(f"  {kind:12} {' '.join(cmd)}")
+            print(f"{datetime.now():%H.%M} teho {control()['teho']}")
+            for kind, v, cmd in todo:
+                print(f"  {kind:12} {' '.join(with_power(cmd))}")
             return
+        atomic_write(RUNNING, {
+            "tyyppi": kind, "id": v["id"], "stromo": v["stromo"], "ajo": output_of(cmd),
+            "alkoi": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "vaihe": STAGE_OF_JOB[kind], "teho": control()["teho"],
+        })
+        print(f"{datetime.now():%H.%M} {kind}: {v['id']}", flush=True)
         if kind == "tryout":
             proc = subprocess.run(cmd, capture_output=True, text=True)
             try:
@@ -535,6 +580,7 @@ def run_queue(dry):
             except ValueError:
                 result = {"ok": False, "virhe": (proc.stderr or proc.stdout)[-2000:]}
             result.setdefault("ok", proc.returncode == 0)
+            result["stromo4"] = stromo4_revision()
             f = tryout_file(v)
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(json.dumps(result, ensure_ascii=False))
@@ -547,7 +593,10 @@ def run_queue(dry):
                 proc = subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT)
             if proc.returncode != 0:
                 print(f"  epäonnistui ({proc.returncode}), ks. {log}. Pysähdytään.", flush=True)
+                if proc.returncode not in (-signal.SIGINT, 130):
+                    add_event("virhe", v["stromo"], f"Ajo epäonnistui ({STAGE_OF_JOB[kind]}, {v['id']}); LIIGA pysähtyi.")
                 return
+        ran += 1
 
 
 # ---------- tulosteet ----------
@@ -832,6 +881,9 @@ def state_json(vs, rows, runs, state):
 def start_background():
     if liiga_running():
         return {"ok": True, "viesti": "LIIGA on jo käynnissä"}
+    vs, rows, runs = variants(), read_ledger(), index_runs()
+    if not allowed_jobs(vs, rows, runs, evaluate(vs, rows, runs)):
+        return {"ok": False, "viesti": "Ajojono on tyhjä: siirrä ensin stromo ajojonoon"}
     TILA.mkdir(parents=True, exist_ok=True)
     with (TILA / "aja.log").open("a") as log:
         child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "aja"], stdin=subprocess.DEVNULL,
@@ -848,6 +900,9 @@ def stop_background():
     if not any(part.endswith(b"liiga.py") for part in cmdline) or b"aja" not in cmdline:
         raise ValueError("PID ei ole LIIGAn aja-prosessi")
     os.killpg(os.getpgid(pid), signal.SIGINT)
+    current = read_json(RUNNING, {})
+    add_event("keskeytetty", current.get("stromo"),
+              "LIIGA pysäytettiin; keskeytetty ajo alkaa seuraavalla kerralla alusta.")
     return {"ok": True, "pysaytetty": pid}
 
 
@@ -870,17 +925,413 @@ def queue_command(command, identifier, vs):
     return {"ok": True, **c}
 
 
+# ---------- LIIGA 2: selainohjaus (omistaja lukitsi 4.11.2026, STROMO4_liiga2_maarittely.md) ----------
+
+OHJAUS = TILA / "ohjaus.json"  # {"siirrot": {stromo: vaihe}, "jono": [stromo], "teho": "taysi", "haettu": iso}
+TAPAHTUMAT = TILA / "tapahtumat.jsonl"
+STROMOTILA = TILA / "stromotila.json"
+TAPAHTUMALUKKO = TILA / "tapahtumat.lock"
+# Omistajan siirrot: Dopingtesti kattaa Kuntopuntarin (sama tappotestiajo).
+SIIRROT = ["Try out", "Treenileiri", "Dopingtesti", "Kausi", "Playoffit"]
+SLOT = {"Try out": 0, "Treenileiri": 1, "Dopingtesti": 2, "Kuntopuntari": 2, "Kausi": 3, "Playoffit": 4,
+        "Näytösottelu": 5}
+KIERROS2_ALKOI = "2026-11-04"
+TEHO = {"kevyt": 4, "taysi": max(1, (os.cpu_count() or 1) - 2)}
+STROMO_RE = r"[a-z]+/[A-Za-z0-9_]{1,120}"
+
+
+def control():
+    c = read_json(OHJAUS, {})
+    return {"siirrot": dict(c.get("siirrot", {})), "jono": list(c.get("jono", [])),
+            "teho": c.get("teho") if c.get("teho") in TEHO else "taysi", "haettu": c.get("haettu"),
+            "migroitu": bool(c.get("migroitu"))}
+
+
+def save_control(c):
+    atomic_write(OHJAUS, {k: c[k] for k in ("siirrot", "jono", "teho", "haettu", "migroitu")})
+
+
+def git_out(*args, cwd=None):
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+
+_REVISION = []
+
+
+def stromo4_revision(refresh=False):
+    if refresh or not _REVISION:
+        try:
+            _REVISION[:] = [git_out("rev-parse", "--short=12", "HEAD")]
+        except (OSError, subprocess.CalledProcessError):
+            _REVISION[:] = [None]
+    return _REVISION[0]
+
+
+def missing_block(result):
+    """Try outin virhe 'tuntematon palikka X' → X (muuten None)."""
+    m = re.search(r"tuntematon palikka '?([A-Za-z0-9_]+)'?", json.dumps(result, ensure_ascii=False))
+    return m.group(1) if m and not result.get("ok") else None
+
+
+def waiting_block(v):
+    """Puuttuva palikka samalla STROMO4-versiolla → ei ajeta Try outia uudelleen ennen päivitystä."""
+    result = read_json(tryout_file(v), None)
+    if not result or not missing_block(result):
+        return None
+    return missing_block(result) if result.get("stromo4") == stromo4_revision() else None
+
+
+def playoff_opened():
+    return {s for s, stage in control()["siirrot"].items() if stage == "Playoffit"}
+
+
+def with_power(cmd):
+    if "research.replay" not in cmd or "--processes" in cmd:
+        return cmd
+    return cmd + ["--processes", str(TEHO[control()["teho"]])]
+
+
+def dead_status(status):
+    return status.startswith("karsittu") or status.startswith("ei voi edetä")
+
+
+def stromo_views(vs, rows, runs, state, ctl=None):
+    """Stromotason näkymä: kategoria prospekti / jonossa / ajossa / odottaa / hautausmaa / historia / valmis."""
+    ctl = ctl or control()
+    running = read_json(RUNNING, None) if liiga_running() else None
+    pending = jobs(vs, rows, runs, state)
+    est = estimates(runs)
+    scale = TEHO["taysi"] / TEHO["kevyt"] if ctl["teho"] == "kevyt" else 1
+    groups = {}
+    for v in vs:
+        groups.setdefault(v["stromo"], []).append(v)
+    out = {}
+    for s, group in groups.items():
+        sha = group[0]["sha256"]
+        own = [r for r in rows if r["stromo"] == s and r["sha256"] == sha]
+        first = min((r["aika"] for r in own), default=None)
+        allowed = SIIRROT.index(ctl["siirrot"][s]) if s in ctl["siirrot"] else -1
+        promoted = any((u := last(rows, "ylennys", v)) and u["lapaisy"] for v in group)
+        killer = next((v for v in group if neighbor_sign(rows, v) is False), None)
+        alive = [v for v in group if not dead_status(state[v["id"]][1])]
+        dead = (bool(killer) if not promoted else False) or not alive
+        need = min((SLOT[state[v["id"]][0]] for v in alive), default=None)
+        block = next((b for v in group if (b := waiting_block(v))), None)
+        mine = [(k, v) for k, v, _ in pending if v["stromo"] == s and SLOT[STAGE_OF_JOB[k]] <= allowed]
+        view = {
+            "stromo": s, "tekija": s.split("/", 1)[0], "nimi": group[0]["nimi"], "selitys": group[0]["selitys"],
+            "siirretty": ctl["siirrot"].get(s),
+            "variantit": [{"id": v["id"], "params": v["params"], "vaihe": state[v["id"]][0],
+                           "tila": state[v["id"]][1]} for v in group],
+        }
+        if dead:
+            who = killer or group[-1]
+            row = next((last(rows, e, who) for e in ("treenileiri", "valitarkistus", "tryout") if last(rows, e, who)),
+                       None)
+            t = (row or {}).get("tulos", {})
+            view |= {"kategoria": "hautausmaa", "vaihe": state[who["id"]][0], "syy": state[who["id"]][1],
+                     "aika": (row or {}).get("aika"), "kierros": 1 if first and first < KIERROS2_ALKOI else 2,
+                     "luvut": {k: t.get(k) for k in ("reuna", "kynnys", "rypaat", "per_vrk")}}
+        elif first and first < KIERROS2_ALKOI:
+            view |= {"kategoria": "historia", "kierros": 1, "syy": "kierros 1 – jäi historiaan (omistaja 4.11.)"}
+        elif need == SLOT["Näytösottelu"]:
+            view |= {"kategoria": "valmis"}
+        elif block or (allowed < 0 and not own):
+            view |= {"kategoria": "prospekti", "palikka": block}
+        elif running and running.get("stromo") == s:
+            view |= {"kategoria": "ajossa", "vaihe": running.get("vaihe")}
+        elif need is not None and need > allowed:
+            view |= {"kategoria": "odottaa", "lapi": SIIRROT[need - 1] if need else None,
+                     "seuraava": SIIRROT[need] if need < len(SIIRROT) else None}
+        else:
+            notes = sorted({state[v["id"]][1] for v in alive})
+            view |= {"kategoria": "jonossa", "vaihe": SIIRROT[allowed] if allowed >= 0 else None,
+                     "huom": None if mine else ", ".join(notes)}
+        if view["kategoria"] in ("jonossa", "ajossa"):
+            view["ajoja"] = len(mine)
+            view["arvio_s"] = round(sum(est.get(k, ARVIO_S.get(k, 600)) * (1 if k == "tryout" else scale)
+                                        for k, _ in mine))
+        out[s] = view
+    if not ctl["migroitu"]:  # ensimmäinen LIIGA 2 -kutsu: kesken olevat jatkavat nykyisen vaiheensa loppuun
+        for s, view in out.items():
+            group = groups[s]
+            alive = [v for v in group if not dead_status(state[v["id"]][1])]
+            if view["kategoria"] == "odottaa" and alive:
+                ctl["siirrot"][s] = SIIRROT[min(SLOT[state[v["id"]][0]] for v in alive)]
+                ctl["jono"].append(s)
+        ctl["migroitu"] = True
+        save_control(ctl)
+        return stromo_views(vs, rows, runs, state, ctl)
+    return out
+
+
+def queue_order(views, ctl):
+    members = [s for s, w in views.items() if w["kategoria"] in ("jonossa", "ajossa")]
+    order = [s for s in ctl["jono"] if s in members]
+    return order + sorted(s for s in members if s not in order)
+
+
+def allowed_jobs(vs, rows, runs, state):
+    ctl = control()
+    views = stromo_views(vs, rows, runs, state, ctl)
+    order = queue_order(views, ctl)
+    todo = [
+        (k, v, cmd) for k, v, cmd in jobs(vs, rows, runs, state)
+        if v["stromo"] in order and SLOT[STAGE_OF_JOB[k]] <= SIIRROT.index(ctl["siirrot"][v["stromo"]])
+    ]
+    return sorted(todo, key=lambda j: order.index(j[1]["stromo"]))
+
+
+# ---------- tapahtumat (liven Loki ja Telegram palvelimen kautta) ----------
+
+
+def _events_locked(stream_lock):
+    fcntl.flock(stream_lock, fcntl.LOCK_EX)
+
+
+def read_events():
+    if not TAPAHTUMAT.exists():
+        return []
+    return [json.loads(line) for line in TAPAHTUMAT.read_text().splitlines() if line.strip()]
+
+
+def _append_event(laji, stromo, teksti):
+    n = len(read_events()) + 1
+    row = {"id": n, "aika": datetime.now(timezone.utc).isoformat(timespec="seconds"), "laji": laji,
+           "stromo": stromo, "teksti": teksti}
+    with TAPAHTUMAT.open("a") as stream:
+        stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+def add_event(laji, stromo, teksti):
+    TILA.mkdir(parents=True, exist_ok=True)
+    with TAPAHTUMALUKKO.open("a") as lock:
+        _events_locked(lock)
+        return _append_event(laji, stromo, teksti)
+
+
+def view_key(w):
+    k = w["kategoria"]
+    if k == "odottaa":
+        return f"odottaa:{w['seuraava']}"
+    if k == "prospekti" and w.get("palikka"):
+        return "prospekti:palikka"
+    return k
+
+
+def sync_events(vs, rows, runs, state):
+    """Vertaa stromojen tilaa edelliseen ja kirjaa muutokset tapahtumiksi (yksi kirjoittaja kerrallaan)."""
+    ctl = control()
+    views = stromo_views(vs, rows, runs, state, ctl)
+    changed = False
+    for s, w in views.items():  # puuttuva palikka palauttaa prospekteihin
+        if w["kategoria"] == "prospekti" and w.get("palikka") and s in ctl["siirrot"]:
+            del ctl["siirrot"][s]
+            changed = True
+    if changed:
+        save_control(ctl)
+    TILA.mkdir(parents=True, exist_ok=True)
+    with TAPAHTUMALUKKO.open("a") as lock:
+        _events_locked(lock)
+        saved = read_json(STROMOTILA, None)
+        previous = None if saved is None else saved.get("tila", saved)
+        notified = set(() if saved is None else saved.get("ilmoitetut", []))
+        current = {s: view_key(w) for s, w in views.items()}
+        if previous is None:
+            notified = {f"{s}|{k}" for s, k in current.items()}
+        else:
+            fresh = [s for s, k in current.items() if s not in previous and k.startswith("prospekti")]
+            if fresh:
+                _append_event("prospektit", None, f"{len(fresh)} uutta prospektia: " + ", ".join(fresh))
+            for s, k in current.items():
+                old, w = previous.get(s), views[s]
+                if old is None or old == k or f"{s}|{k}" in notified:
+                    continue
+                notified.add(f"{s}|{k}")
+                if k.startswith("odottaa:"):
+                    _append_event("lapaisi", s, f"{s} läpäisi vaiheen {w['lapi']} → odottaa siirtoa: {w['seuraava']}")
+                elif k == "hautausmaa":
+                    _append_event("hautausmaa", s, f"{s} hautausmaalle ({w['vaihe']}): {w['syy']}")
+                elif k == "valmis":
+                    _append_event("valmis", s, f"{s} läpäisi Playoffit → Näytösottelu")
+                elif k == "prospekti:palikka":
+                    _append_event("palikka", s, f"{s} odottaa palikkaa {w['palikka']} (STROMO4); palasi prospekteihin")
+        atomic_write(STROMOTILA, {"tila": current, "ilmoitetut": sorted(notified)})
+    return views
+
+
+def queue_done_event(vs, rows, runs, started):
+    state = evaluate(vs, rows, runs)
+    sync_events(vs, rows, runs, state)
+    since = [e for e in read_events() if e["aika"] >= started]
+    passed = sum(e["laji"] == "lapaisi" for e in since)
+    dead = sum(e["laji"] == "hautausmaa" for e in since)
+    add_event("jono_valmis", None, f"Ajojono valmis: {passed} odottaa siirtoa, {dead} hautausmaalle.")
+
+
+# ---------- komennot ----------
+
+
+def fetch_updates():
+    """Hae prospektit: builder mainista aina; STROMO4-tutkimuskansio vain, kun LIIGA ei aja."""
+    out = {"ok": True}
+    b = str(BUILDER)
+    try:
+        if git_out("rev-parse", "--abbrev-ref", "HEAD", cwd=b) != "main" or git_out(
+                "status", "--porcelain", "--untracked-files=no", cwd=b):
+            out["builder_virhe"] = "Builder ei ole puhtaassa main-haarassa; haku ohitettiin."
+        else:
+            git_out("fetch", "-q", "origin", "main", cwd=b)
+            git_out("merge", "--ff-only", "-q", "origin/main", cwd=b)
+    except (OSError, subprocess.CalledProcessError) as error:
+        out["builder_virhe"] = f"Builderin haku epäonnistui: {getattr(error, 'stderr', '') or error}"[:500]
+    TILA.mkdir(parents=True, exist_ok=True)
+    with LOCK.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            out["stromo4"] = "päivitetään ajon jälkeen"
+        else:
+            try:
+                if git_out("status", "--porcelain", "--untracked-files=no"):
+                    out["stromo4_virhe"] = "Tutkimuskansiossa on muutoksia; STROMO4:ää ei päivitetty."
+                else:
+                    git_out("fetch", "-q", "origin", "main")
+                    before = git_out("rev-parse", "HEAD")
+                    target = git_out("rev-parse", "origin/main")
+                    if before != target:
+                        git_out("checkout", "-q", "--detach", target)
+                    if before != target or not Path(".venv").exists():
+                        env = {**os.environ}
+                        env.setdefault("UV_PYTHON_INSTALL_DIR", str(Path.home() / ".local/share/uv/python"))
+                        subprocess.run(["uv", "sync", "--group", "research", "-q"], env=env, check=True,
+                                       capture_output=True, text=True)
+                    out["stromo4"] = "päivitetty" if before != target else "ajan tasalla"
+            except (OSError, subprocess.CalledProcessError) as error:
+                out["stromo4_virhe"] = f"STROMO4-päivitys epäonnistui: {getattr(error, 'stderr', '') or error}"[:500]
+    stromo4_revision(refresh=True)
+    ctl = control()
+    ctl["haettu"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    save_control(ctl)
+    out["ok"] = not any(k.endswith("_virhe") for k in out)
+    out["versiot"] = {"stromo4": stromo4_revision(), "haettu": ctl["haettu"]}
+    return out
+
+
+def stromo_command(command, target, confirm=None):
+    if not re.fullmatch(STROMO_RE, target or ""):
+        raise ValueError("Virheellinen stromon nimi")
+    vs, rows, runs = variants(), read_ledger(), index_runs()
+    state = evaluate(vs, rows, runs)
+    ctl = control()
+    views = stromo_views(vs, rows, runs, state, ctl)
+    ctl = control()
+    if target not in views:
+        raise ValueError("Tuntematon stromo")
+    w = views[target]
+    if command == "siirra":
+        if w["kategoria"] == "prospekti" and not w.get("palikka"):
+            ctl["siirrot"][target] = "Try out"
+        elif w["kategoria"] == "odottaa" and w["seuraava"] and w["seuraava"] != "Playoffit":
+            ctl["siirrot"][target] = w["seuraava"]
+        elif w["kategoria"] == "odottaa" and w["seuraava"] == "Playoffit":
+            raise ValueError("Playoffit avataan omalla vahvistuksella")
+        else:
+            raise ValueError(f"Stromoa ei voi siirtää (tila: {w['kategoria']})")
+        ctl["jono"] = [s for s in ctl["jono"] if s != target] + [target]
+    elif command == "palauta":
+        if w["kategoria"] != "jonossa":
+            raise ValueError("Vain jonossa odottavan (ei ajossa olevan) stromon voi palauttaa")
+        stage = SIIRROT.index(ctl["siirrot"][target])
+        if stage == 0 and not any(r["stromo"] == target for r in rows):
+            del ctl["siirrot"][target]
+        elif stage > 0:
+            ctl["siirrot"][target] = SIIRROT[stage - 1]
+        else:
+            raise ValueError("Try outin aloittanutta stromoa ei voi palauttaa prospekteihin")
+        ctl["jono"] = [s for s in ctl["jono"] if s != target]
+    elif command in ("ylos", "alas"):
+        order = queue_order(views, ctl)
+        if target not in order:
+            raise ValueError("Stromo ei ole ajojonossa")
+        i = order.index(target)
+        j = i - 1 if command == "ylos" else i + 1
+        if 0 <= j < len(order):
+            order[i], order[j] = order[j], order[i]
+        ctl["jono"] = order
+    elif command == "playoffit":
+        if confirm != target:
+            raise ValueError("Vahvistus ei vastaa stromon nimeä")
+        if w["kategoria"] != "odottaa" or w["seuraava"] != "Playoffit":
+            raise ValueError("Stromo ei odota Playoffeja")
+        ctl["siirrot"][target] = "Playoffit"
+        ctl["jono"] = [s for s in ctl["jono"] if s != target] + [target]
+        add_event("playoffit", target, f"Omistaja avasi koskemattoman jakson stromolle {target} (Playoffit).")
+    save_control(ctl)
+    return {"ok": True, "siirrot": ctl["siirrot"], "jono": ctl["jono"]}
+
+
+def state_json2(vs, rows, runs, state):
+    views = sync_events(vs, rows, runs, state)
+    ctl = control()
+    order = queue_order(views, ctl)
+    running = liiga_running()
+    current = read_json(RUNNING, None) if running else None
+    if current:
+        config = read_json(RUNS / current["ajo"] / "config.json", {}) if current.get("ajo") else {}
+        pct, eta = config.get("progress_percent"), config.get("eta_seconds")
+        current["edistyminen"] = None if pct is None else max(0.0, min(1.0, pct / 100))
+        current["arvio_valmis"] = (
+            datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + eta, timezone.utc).isoformat(timespec="seconds")
+            if isinstance(eta, (int, float)) else None
+        )
+    try:
+        builder = git_out("rev-parse", "--short=12", "HEAD", cwd=str(BUILDER))
+    except (OSError, subprocess.CalledProcessError):
+        builder = None
+    by_cat = lambda c: [w for w in views.values() if w["kategoria"] == c]  # noqa: E731
+    queue = [views[s] for s in order]
+    total = sum(w.get("arvio_s") or 0 for w in queue)
+    hof = [{"id": v["id"], "stromo": v["stromo"], "tekija": v["stromo"].split("/", 1)[0], "params": v["params"],
+            "suhde": ratio, "reuna": t["reuna"], "kynnys": t["kynnys"], "rypaat": t["rypaat"],
+            "vaihe": state[v["id"]][0], "tila": state[v["id"]][1]}
+           for ratio, v, t in hof_entries(vs, rows)[:5]]
+    return {
+        "versio": 2,
+        "aika": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "versiot": {"builder": builder, "stromo4": stromo4_revision(), "haettu": ctl["haettu"]},
+        "pelikone": {"liiga_kaynnissa": running, "teho": ctl["teho"], "prosessit": TEHO},
+        "kaynnissa": current,
+        "prospektit": sorted(by_cat("prospekti"), key=lambda w: w["stromo"]),
+        "ajojono": queue,
+        "jono_arvio_s": total,
+        "odottavat": sorted(by_cat("odottaa"), key=lambda w: (-SLOT[w["seuraava"]] if w["seuraava"] else 0, w["stromo"])),
+        "valmiit": by_cat("valmis"),
+        "hautausmaa": sorted(by_cat("hautausmaa"), key=lambda w: w.get("aika") or "", reverse=True),
+        "historia": sorted(by_cat("historia"), key=lambda w: w["stromo"]),
+        "hall_of_fame": hof,
+        "tapahtumat": read_events()[-50:],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="LIIGA")
     parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo", "kaynnista",
-                                            "pysayta", "jono-ensin", "jono-ohita", "jono-palauta"])
-    parser.add_argument("kohde", nargs="?", help="paketti: ajokansio, variantti tai stromon nimi; jono-*: variantti")
+                                            "pysayta", "jono-ensin", "jono-ohita", "jono-palauta",
+                                            "tila2", "hae", "siirra", "palauta", "ylos", "alas", "teho",
+                                            "playoffit"])
+    parser.add_argument("kohde", nargs="?",
+                        help="paketti: ajokansio/variantti/stromo; jono-*: variantti; siirra|palauta|ylos|alas|"
+                             "playoffit: stromo (esim. gpt/utc_paivanvaihde); teho: kevyt|taysi")
+    parser.add_argument("--vahvista", help="playoffit: stromon nimi uudelleen")
     parser.add_argument("--kuiva", action="store_true")
     parser.add_argument("--json", action="store_true", help="tila: koneluettava (liiga.stromo.uk)")
     args = parser.parse_args()
     if not Path("research/replay.py").exists():
         sys.exit("Aja STROMO4-tutkimuskansiossa (~/stromo4-tutkimus).")
-    machine = args.json or args.komento in ("kaynnista", "pysayta") or args.komento.startswith("jono-")
+    machine = args.json or args.komento in ("kaynnista", "pysayta", "tila2", "hae", "siirra", "palauta", "ylos",
+                                            "alas", "teho", "playoffit") or args.komento.startswith("jono-")
     if machine:
         try:
             if args.komento == "kaynnista":
@@ -889,6 +1340,20 @@ def main():
                 out = stop_background()
             elif args.komento.startswith("jono-"):
                 out = queue_command(args.komento, args.kohde, variants())
+            elif args.komento == "hae":
+                out = fetch_updates()
+            elif args.komento in ("siirra", "palauta", "ylos", "alas", "playoffit"):
+                out = stromo_command(args.komento, args.kohde, args.vahvista)
+            elif args.komento == "teho":
+                if args.kohde not in TEHO:
+                    raise ValueError("Teho on kevyt tai taysi")
+                ctl = control()
+                ctl["teho"] = args.kohde
+                save_control(ctl)
+                out = {"ok": True, "teho": args.kohde, "prosessit": TEHO[args.kohde]}
+            elif args.komento == "tila2":
+                vs, rows, runs = variants(), read_ledger(), index_runs()
+                out = state_json2(vs, rows, runs, evaluate(vs, rows, runs))
             else:
                 vs, rows, runs = variants(), read_ledger(), index_runs()
                 out = state_json(vs, rows, runs, evaluate(vs, rows, runs))

@@ -2,7 +2,9 @@
 # Pakotettu SSH-komento palvelimen LIIGA-sivulle (liiga.stromo.uk).
 # authorized_keys (pelikone):
 #   command="/home/stromoadmin/stromo-builder/liiga/liiga-ohjaus",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA… stromo4-liiga
-# Sallitut: tila --json | raportti | kaynnista | pysayta | jono-ensin|jono-ohita|jono-palauta <variantti>
+# Sallitut: tila --json | tila2 | hae | raportti | kaynnista | pysayta | teho kevyt|taysi
+#           siirra|palauta|ylos|alas <stromo> | playoffit <stromo> --vahvista <stromo>
+#           jono-ensin|jono-ohita|jono-palauta <variantti>  (LIIGA 1, poistuu kun sivu on päivitetty)
 set -euo pipefail
 [[ -f $HOME/.local/bin/env ]] && source "$HOME/.local/bin/env"
 read -r -a words <<<"${SSH_ORIGINAL_COMMAND:-}"
@@ -10,7 +12,13 @@ read -r -a words <<<"${SSH_ORIGINAL_COMMAND:-}"
 fail() { printf '{"virhe": "%s"}\n' "$1"; exit 1; }
 case "${#words[@]}:${words[0]:-}" in
   "2:tila") [[ ${words[1]} == --json ]] || fail "tila vaatii --json" ;;
-  "1:raportti"|"1:kaynnista"|"1:pysayta") ;;
+  "1:raportti"|"1:kaynnista"|"1:pysayta"|"1:tila2"|"1:hae") ;;
+  "2:teho") [[ ${words[1]} == kevyt || ${words[1]} == taysi ]] || fail "teho on kevyt tai taysi" ;;
+  "2:siirra"|"2:palauta"|"2:ylos"|"2:alas")
+    [[ ${words[1]} =~ ^[a-z]+/[A-Za-z0-9_]{1,120}$ ]] || fail "virheellinen stromo" ;;
+  "4:playoffit")
+    [[ ${words[1]} =~ ^[a-z]+/[A-Za-z0-9_]{1,120}$ && ${words[2]} == --vahvista && ${words[3]} == "${words[1]}" ]] \
+      || fail "playoffit vaatii vahvistuksen: playoffit <stromo> --vahvista <stromo>" ;;
   "2:jono-ensin"|"2:jono-ohita"|"2:jono-palauta")
     [[ ${words[1]} =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,511}$ ]] || fail "virheellinen variantti" ;;
   *) fail "komento ei ole sallittu" ;;
