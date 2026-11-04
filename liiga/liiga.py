@@ -268,7 +268,7 @@ def evaluate(vs, rows, runs):
                 continue  # puuttuva palikka ei karsi: stromo odottaa STROMO4:n päivitystä
             cap = SAANNOT["tryout"]["max_halytykset"]
             ok = result.get("ok", False) and result.get("alerts_per_day", 0) <= cap
-            record(rows, {**base_row(v, "tryout"), "lapaisy": ok, "tulos": result})
+            record(rows, {**base_row(v, "tryout"), "lapaisy": ok, "tulos": result, "seula": seula()})
     # Välitarkistus: ensimmäinen kolmannes saa vain pudottaa (tiheys, harvinaisuus, toivottomuus)
     vt = t["valitarkistus"]
     for v in vs:
@@ -313,11 +313,12 @@ def evaluate(vs, rows, runs):
                     "ajo": path.name,
                     "tulos": {**m, "osuma": win, "verrokki": base, "reuna": e, "kynnys": threshold},
                     "syyt": reasons,
+                    "seula": seula(),
                 },
             )
     # 3.1d: kun yksikin saman stromon variantti on jo miinuksella tai karsittu, kukaan
     # sen naapureista ei voi enää läpäistä naapurisääntöä -> keskeneräisiä ei ajeta.
-    doomed = {v["stromo"] for v in vs if neighbor_sign(rows, v) is False}
+    doomed = {v["stromo"] for v in vs if neighbor_sign(rows, v) is False} if seula()["karsinta"] else set()
     for v in vs:
         if (
             v["stromo"] in doomed
@@ -326,28 +327,11 @@ def evaluate(vs, rows, runs):
             and (to := last(rows, "tryout", v)) and to["lapaisy"]
         ):
             record(rows, {**base_row(v, "ohitus"), "lapaisy": False, "syy": "naapuri karsittu"})
-    # Naapurisääntö ja ylennys (enintään max_jatkoon per arviointi, suurin reuna/kynnys)
-    candidates = []
-    for v in vs:
-        row = last(rows, "treenileiri", v)
-        if not row or row["syyt"] or last(rows, "ylennys", v):
-            continue
-        others = [n for n in vs if n["stromo"] == v["stromo"] and n is not v]
-        # Naapurin tila: reuna Treenileiriltä, tai välitarkistuksessa / Try outissa pudonnut = ei plussalla.
-        signs = [neighbor_sign(rows, n) for n in others]
-        if others and all(sg is True for sg in signs):
-            candidates.append((row["tulos"]["reuna"] / row["tulos"]["kynnys"], v))
-        elif others and False in signs:
-            record(rows, {**base_row(v, "ylennys"), "lapaisy": False, "syy": "naapuri"})
-    candidates.sort(key=lambda c: -c[0])
-    for rank, (_, v) in enumerate(candidates):
-        ok = rank < t["max_jatkoon"]
-        record(rows, {**base_row(v, "ylennys"), "lapaisy": ok, "syy": None if ok else "kiintiö"})
+    # LIIGA 2: ylennys lasketaan seulasta (promoted); omistaja siirtää käsin, kiintiötä ei ole.
     # Dopingtesti ja Kuntopuntari: ajokansion tappotestit.json (research.tappotestit, 3.1b)
     for v in vs:
-        up = last(rows, "ylennys", v)
         tr = last(rows, "treenileiri", v)
-        if up and up["lapaisy"] and not last(rows, "dopingtesti", v):
+        if promoted(rows, v, vs) and not last(rows, "dopingtesti", v):
             f = RUNS / tr["ajo"] / "tappotestit.json"
             if f.exists():
                 tests = json.loads(f.read_text()).get("testit", {})
@@ -398,7 +382,9 @@ def evaluate(vs, rows, runs):
                     "kynnys": threshold,
                     "z": z,
                     "kaudet_plussalla": plus,
+                    "rypaat": pooled["rypaat"],
                 },
+                "seula": seula(),
             },
         )
     # Playoffit: vain omistajan avaamat ajot luetaan
@@ -420,32 +406,37 @@ def evaluate(vs, rows, runs):
                     },
                 )
     for v in vs:
-        state[v["id"]] = stage_of(rows, v)
+        state[v["id"]] = stage_of(rows, v, vs)
     return state
 
 
-def stage_of(rows, v):
-    """(vaihe, tila) – tila: 'odottaa', 'läpi', 'karsittu: syy'."""
+def stage_of(rows, v, vs=None):
+    """(vaihe, tila) – tila: 'odottaa…', 'läpi', 'karsittu: syy'. Läpäisy lasketaan voimassa olevasta seulasta."""
+    vs = vs if vs is not None else [v]
+    sl = seula()
     to = last(rows, "tryout", v)
     if not to:
         return "Try out", "odottaa"
-    if not to["lapaisy"]:
+    if not tryout_pass(to, sl):
         return "Try out", "karsittu"
     tr = last(rows, "treenileiri", v)
     vt = last(rows, "valitarkistus", v)
-    if not tr and vt and not vt["lapaisy"]:
-        return "Treenileiri", "karsittu välitarkistuksessa: " + ", ".join(vt["syyt"])
-    if not tr and last(rows, "ohitus", v):
-        return "Treenileiri", "ei voi edetä: naapuri karsittu"
     if not tr:
-        return "Treenileiri", "odottaa" if vt else "odottaa välitarkistusta"
-    if tr["syyt"]:
-        return "Treenileiri", "karsittu: " + ", ".join(tr["syyt"])
-    up = last(rows, "ylennys", v)
-    if not up:
+        if sl["karsinta"] and vt and not vt["lapaisy"]:
+            return "Treenileiri", "karsittu välitarkistuksessa: " + ", ".join(vt["syyt"])
+        if sl["karsinta"] and last(rows, "ohitus", v):
+            return "Treenileiri", "ei voi edetä: naapuri karsittu"
+        if sl["karsinta"] and not vt:
+            return "Treenileiri", "odottaa välitarkistusta"
+        return "Treenileiri", "odottaa"
+    reasons = tl_reasons(tr, sl)
+    if reasons:
+        return "Treenileiri", "karsittu: " + ", ".join(reasons)
+    nb = neighbor_ok(rows, v, vs, sl)
+    if nb is None:
         return "Treenileiri", "odottaa naapuria"
-    if not up["lapaisy"]:
-        return "Treenileiri", "karsittu: " + up["syy"]
+    if not nb:
+        return "Treenileiri", "karsittu: naapuri"
     d = last(rows, "dopingtesti", v)
     if not d:
         return "Dopingtesti", "odottaa" if Path("research/tappotestit.py").exists() else "odottaa työkalua (3.1b)"
@@ -457,7 +448,7 @@ def stage_of(rows, v):
     ka = last(rows, "kausi", v)
     if not ka:
         return "Kausi", "odottaa"
-    if not ka["lapaisy"]:
+    if not kausi_pass(ka, sl, sum(1 for r in rows if r["tapahtuma"] == "kausi")):
         return "Kausi", "karsittu"
     po = last(rows, "playoffit", v)
     if not po:
@@ -465,6 +456,146 @@ def stage_of(rows, v):
     if not po["lapaisy"]:
         return "Playoffit", "karsittu"
     return "Näytösottelu", "valmis"
+
+
+# ---------- seula (omistajan säädettävä suppilo, 4.11.2026) ----------
+
+SEULAT = {
+    "iso_kampa": {"karsinta": False, "tryout_max": 200, "tl_k": 1.0, "tl_min_rypaat": 30, "tl_max_vrk": 20,
+                  "naapuri": "enemmistö", "kausi_alfa": 0.05, "kausi_min_plus": 3},
+    "normaali": {"karsinta": True, "tryout_max": 200, "tl_k": 2.0, "tl_min_rypaat": 100, "tl_max_vrk": 20,
+                 "naapuri": "kaikki", "kausi_alfa": 0.05, "kausi_min_plus": 3},
+    "tiukka": {"karsinta": True, "tryout_max": 200, "tl_k": 3.0, "tl_min_rypaat": 100, "tl_max_vrk": 20,
+               "naapuri": "kaikki", "kausi_alfa": 0.01, "kausi_min_plus": 3},
+}
+SEULA_OLETUS = "iso_kampa"
+# Omat säätimet: (tyyppi, min, max) tai valinnat
+SEULA_RAJAT = {
+    "karsinta": (bool,), "tryout_max": (int, 10, 1000), "tl_k": (float, 0.0, 3.0),
+    "tl_min_rypaat": (int, 10, 300), "tl_max_vrk": (int, 1, 100), "naapuri": ("kaikki", "enemmistö", "pois"),
+    "kausi_alfa": (float, 0.001, 0.2), "kausi_min_plus": (int, 1, 4),
+}
+VERTAILTAVAT = ("tl_k", "tl_min_rypaat", "tl_max_vrk", "naapuri", "karsinta", "tryout_max")
+
+
+def seula():
+    """Voimassa oleva seula: {'nimi': …, arvot…}."""
+    c = read_json(OHJAUS, {}).get("seula") or {}
+    base = dict(SEULAT.get(c.get("nimi"), SEULAT[SEULA_OLETUS]))
+    if c.get("nimi") == "oma":
+        base.update({k: c[k] for k in SEULA_RAJAT if k in c})
+    return {"nimi": c.get("nimi") if c.get("nimi") in (*SEULAT, "oma") else SEULA_OLETUS, **base}
+
+
+def tryout_pass(row, sl):
+    result = row.get("tulos", {})
+    return bool(result.get("ok")) and result.get("alerts_per_day", 0) <= sl["tryout_max"]
+
+
+def se_pp(n):
+    return 50 / math.sqrt(n) if n else None
+
+
+def tl_reasons(row, sl):
+    t = row["tulos"]
+    n, e = t.get("rypaat") or 0, t.get("reuna")
+    reasons = []
+    if n < sl["tl_min_rypaat"]:
+        reasons.append("rypäät")
+    if e is None or not n or e < sl["tl_k"] * se_pp(n):
+        reasons.append("reuna")
+    if t.get("per_vrk", 0) > sl["tl_max_vrk"]:
+        reasons.append("tiheys")
+    return reasons
+
+
+def neighbor_ok(rows, v, vs, sl):
+    """Naapurisääntö seulan mukaan: True/False/None (odottaa)."""
+    if sl["naapuri"] == "pois":
+        return True
+    group = [n for n in vs if n["stromo"] == v["stromo"]]
+    signs = []
+    for n in group:
+        to = last(rows, "tryout", n)
+        tr = last(rows, "treenileiri", n)
+        if tr:
+            signs.append(tr["tulos"]["reuna"] is not None and tr["tulos"]["reuna"] > 0)
+        elif (to and not tryout_pass(to, sl)) or (
+                sl["karsinta"] and (x := last(rows, "valitarkistus", n)) and not x["lapaisy"]):
+            signs.append(False)
+        else:
+            signs.append(None)
+    if sl["naapuri"] == "kaikki":
+        others = [sg for n, sg in zip(group, signs) if n is not v]
+        return False if False in others else None if None in others else True
+    if None in signs:
+        return None
+    return 2 * sum(signs) > len(signs)
+
+
+def promoted(rows, v, vs):
+    sl = seula()
+    tr = last(rows, "treenileiri", v)
+    return bool(tr) and not tl_reasons(tr, sl) and neighbor_ok(rows, v, vs, sl) is True
+
+
+def kausi_pass(row, sl, entered):
+    t = row["tulos"]
+    n = t.get("rypaat")
+    if n is None and t.get("kynnys") and t.get("z"):
+        n = round((50 * t["z"] / t["kynnys"]) ** 2)  # vanha rivi: rypäät kynnyksestä
+    e = t.get("reuna")
+    if e is None or not n:
+        return False
+    z = NormalDist().inv_cdf(1 - sl["kausi_alfa"] / max(1, entered))
+    return e >= 50 * z / math.sqrt(n) and t.get("kaudet_plussalla", 0) >= sl["kausi_min_plus"]
+
+
+def jalkisaadetty(row, sl):
+    """Arvioitiinko tulos eri seulalla kuin ajon aikana? Vanhat rivit = Normaali."""
+    then = row.get("seula") or {"nimi": "normaali", **SEULAT["normaali"]}
+    return any(then.get(k) != sl.get(k) for k in VERTAILTAVAT)
+
+
+def chance_meter(vs, rows, sl):
+    """Sattumamittari: odotettu sattumaläpäisy vs toteutunut Treenileirillä."""
+    alpha = 1 - NormalDist().cdf(sl["tl_k"])
+    measured = [(v, r) for v in vs if (r := last(rows, "treenileiri", v))]
+    passed = sum(1 for _, r in measured if not tl_reasons(r, sl))
+    warn = []
+    if alpha * 100 >= 5:
+        warn.append(f"⚠️ sattumalta läpi ~{alpha * 100:.0f} / 100 varianttia")
+    if sl["tl_min_rypaat"] < 100:
+        warn.append("⚠️ pieni otos: reuna heiluu")
+    if sl["naapuri"] == "pois":
+        warn.append("⚠️ naapurisääntö pois: yksittäinen onnenkantamoinen pääsee läpi")
+    if sl["kausi_alfa"] > 0.05:
+        warn.append("⚠️ Kauden α yli 5 %")
+    expected = len(measured) * alpha
+    return {
+        "alfa": alpha, "per_100": round(alpha * 100, 1), "testattu": len(measured),
+        "odotettu_sattuma": round(expected, 2), "lapaisseet": passed,
+        "erottuu": passed > expected + 2 * math.sqrt(max(expected * (1 - alpha), 1e-9)),
+        "varoitukset": warn,
+    }
+
+
+def results_table(vs, rows, sl):
+    out = []
+    for v in vs:
+        r = last(rows, "treenileiri", v)
+        if not r:
+            continue
+        t = r["tulos"]
+        n, e = t.get("rypaat") or 0, t.get("reuna")
+        se = se_pp(n)
+        out.append({
+            "id": v["id"], "stromo": v["stromo"], "params": v["params"], "reuna": e, "rypaat": n,
+            "se": se, "z": (e / se) if (e is not None and se) else None, "per_vrk": t.get("per_vrk"),
+            "lapaisy": not tl_reasons(r, sl), "syyt": tl_reasons(r, sl),
+            "jalkisaadetty": jalkisaadetty(r, sl), "ajon_seula": (r.get("seula") or {}).get("nimi", "normaali"),
+        })
+    return out
 
 
 # ---------- ajaminen ----------
@@ -496,7 +627,7 @@ def jobs(vs, rows, runs, state):
                 "research.check_stromo", str(v["file"]), "--json",
                 "--day", SAANNOT["tryout"]["paiva"], "--pair", SAANNOT["pari"],
             ] + param_args(v)))
-        elif stage == "Treenileiri" and status == "odottaa välitarkistusta":
+        elif stage == "Treenileiri" and status == "odottaa välitarkistusta" and seula()["karsinta"]:
             path, _ = find_run(runs, v, t["alku"], t["valitarkistus"]["loppu"])
             if not path:
                 out.append(("valitarkistus", v, replay_cmd(v, t["alku"], t["valitarkistus"]["loppu"], f"liiga-vt-{v['id']}")))
@@ -948,7 +1079,9 @@ def control():
 
 
 def save_control(c):
-    atomic_write(OHJAUS, {k: c[k] for k in ("siirrot", "jono", "teho", "haettu", "migroitu")})
+    saved = read_json(OHJAUS, {})
+    saved.update({k: c[k] for k in ("siirrot", "jono", "teho", "haettu", "migroitu")})
+    atomic_write(OHJAUS, saved)
 
 
 def git_out(*args, cwd=None):
@@ -1011,10 +1144,13 @@ def stromo_views(vs, rows, runs, state, ctl=None):
         own = [r for r in rows if r["stromo"] == s and r["sha256"] == sha]
         first = min((r["aika"] for r in own), default=None)
         allowed = SIIRROT.index(ctl["siirrot"][s]) if s in ctl["siirrot"] else -1
-        promoted = any((u := last(rows, "ylennys", v)) and u["lapaisy"] for v in group)
-        killer = next((v for v in group if neighbor_sign(rows, v) is False), None)
+        sl = seula()
+        up = any(promoted(rows, v, vs) for v in group)
+        early = sl["karsinta"] and sl["naapuri"] == "kaikki"
+        killer = next((v for v in group if neighbor_sign(rows, v) is False), None) if early else None
         alive = [v for v in group if not dead_status(state[v["id"]][1])]
-        dead = (bool(killer) if not promoted else False) or not alive
+        dead = (bool(killer) and not up) or not alive
+        killer = killer or next((v for v in group if dead_status(state[v["id"]][1])), None)
         need = min((SLOT[state[v["id"]][0]] for v in alive), default=None)
         block = next((b for v in group if (b := waiting_block(v))), None)
         mine = [(k, v) for k, v, _ in pending if v["stromo"] == s and SLOT[STAGE_OF_JOB[k]] <= allowed]
@@ -1138,8 +1274,18 @@ def sync_events(vs, rows, runs, state):
         previous = None if saved is None else saved.get("tila", saved)
         notified = set(() if saved is None else saved.get("ilmoitetut", []))
         current = {s: view_key(w) for s, w in views.items()}
+        sl = seula()
+        then = (saved or {}).get("seula") or {"nimi": "normaali", **SEULAT["normaali"]}
         if previous is None:
             notified = {f"{s}|{k}" for s, k in current.items()}
+        elif any(then.get(k) != sl.get(k) for k in (*VERTAILTAVAT, "kausi_alfa", "kausi_min_plus")):
+            # Seulan muutos: yksi yhteenveto, ei stromokohtaista piippausta.
+            moved = [s for s, k in current.items() if previous.get(s) not in (None, k)]
+            up = sum(1 for s in moved if current[s].startswith("odottaa:"))
+            down = sum(1 for s in moved if current[s] == "hautausmaa")
+            notified |= {f"{s}|{k}" for s, k in current.items()}
+            _append_event("seula", None, f"Seula {sl['nimi']} arvioi tulokset uudelleen: {up} stromoa odottaa "
+                                         f"siirtoa, {down} hautausmaalle, {len(moved) - up - down} muuta muutosta.")
         else:
             fresh = [s for s, k in current.items() if s not in previous and k.startswith("prospekti")]
             if fresh:
@@ -1157,7 +1303,8 @@ def sync_events(vs, rows, runs, state):
                     _append_event("valmis", s, f"{s} läpäisi Playoffit → Näytösottelu")
                 elif k == "prospekti:palikka":
                     _append_event("palikka", s, f"{s} odottaa palikkaa {w['palikka']} (STROMO4); palasi prospekteihin")
-        atomic_write(STROMOTILA, {"tila": current, "ilmoitetut": sorted(notified)})
+        atomic_write(STROMOTILA, {"tila": current, "ilmoitetut": sorted(notified),
+                                  "seula": {k: sl[k] for k in (*VERTAILTAVAT, "kausi_alfa", "kausi_min_plus", "nimi")}})
     return views
 
 
@@ -1272,6 +1419,47 @@ def stromo_command(command, target, confirm=None):
     return {"ok": True, "siirrot": ctl["siirrot"], "jono": ctl["jono"]}
 
 
+def seula_command(target, key=None, value=None):
+    """seula <iso_kampa|normaali|tiukka|oma> tai seula-arvo <avain> <arvo> (asettaa Oman)."""
+    c = read_json(OHJAUS, {})
+    current = seula()
+    if key is None:
+        if target not in (*SEULAT, "oma"):
+            raise ValueError("Seula on iso_kampa, normaali, tiukka tai oma")
+        new = {"nimi": target, **({k: current[k] for k in SEULA_RAJAT} if target == "oma" else {})}
+    else:
+        if key not in SEULA_RAJAT:
+            raise ValueError("Tuntematon seulan säädin")
+        rule = SEULA_RAJAT[key]
+        if rule[0] is bool:
+            if value not in ("paalla", "pois"):
+                raise ValueError(f"{key}: paalla tai pois")
+            parsed = value == "paalla"
+        elif rule[0] in (int, float):
+            try:
+                parsed = rule[0](value)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key}: luku {rule[1]}–{rule[2]}") from None
+            if not (rule[1] <= parsed <= rule[2]) or (isinstance(parsed, float) and not math.isfinite(parsed)):
+                raise ValueError(f"{key}: luku {rule[1]}–{rule[2]}")
+        else:
+            value = {"enemmisto": "enemmistö"}.get(value, value)
+            if value not in rule:
+                raise ValueError(f"{key}: {' / '.join(rule)}")
+            parsed = value
+        new = {"nimi": "oma", **{k: current[k] for k in SEULA_RAJAT}, key: parsed}
+    c["seula"] = new
+    history = list(c.get("seulahistoria", []))[-49:]
+    history.append({"aika": datetime.now(timezone.utc).isoformat(timespec="seconds"), **new})
+    c["seulahistoria"] = history
+    atomic_write(OHJAUS, c)
+    sl = seula()
+    add_event("seula", None, f"Seula: {sl['nimi']} (raja {sl['tl_k']:g} keskivirhettä, min {sl['tl_min_rypaat']} "
+                             f"rypästä, naapuri {sl['naapuri']}, aikainen karsinta "
+                             f"{'päällä' if sl['karsinta'] else 'pois'})")
+    return {"ok": True, "seula": sl}
+
+
 def state_json2(vs, rows, runs, state):
     views = sync_events(vs, rows, runs, state)
     ctl = control()
@@ -1291,6 +1479,9 @@ def state_json2(vs, rows, runs, state):
     except (OSError, subprocess.CalledProcessError):
         builder = None
     by_cat = lambda c: [w for w in views.values() if w["kategoria"] == c]  # noqa: E731
+    sl = seula()
+    table_rows = results_table(vs, rows, sl)
+    shame = sorted((r for r in table_rows if r["z"] is not None), key=lambda r: r["z"])[:5]
     queue = [views[s] for s in order]
     total = sum(w.get("arvio_s") or 0 for w in queue)
     hof = [{"id": v["id"], "stromo": v["stromo"], "tekija": v["stromo"].split("/", 1)[0], "params": v["params"],
@@ -1311,6 +1502,11 @@ def state_json2(vs, rows, runs, state):
         "hautausmaa": sorted(by_cat("hautausmaa"), key=lambda w: w.get("aika") or "", reverse=True),
         "historia": sorted(by_cat("historia"), key=lambda w: w["stromo"]),
         "hall_of_fame": hof,
+        "hall_of_shame": shame,
+        "seula": {**sl, "esiasetukset": SEULAT, "rajat": {k: list(v[1:]) if v[0] in (int, float) else
+                  (["paalla", "pois"] if v[0] is bool else list(v)) for k, v in SEULA_RAJAT.items()},
+                  "sattuma": chance_meter(vs, rows, sl)},
+        "tulokset": table_rows,
         "tapahtumat": read_events()[-50:],
     }
 
@@ -1320,18 +1516,20 @@ def main():
     parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo", "kaynnista",
                                             "pysayta", "jono-ensin", "jono-ohita", "jono-palauta",
                                             "tila2", "hae", "siirra", "palauta", "ylos", "alas", "teho",
-                                            "playoffit"])
+                                            "playoffit", "seula", "seula-arvo"])
     parser.add_argument("kohde", nargs="?",
                         help="paketti: ajokansio/variantti/stromo; jono-*: variantti; siirra|palauta|ylos|alas|"
                              "playoffit: stromo (esim. gpt/utc_paivanvaihde); teho: kevyt|taysi")
     parser.add_argument("--vahvista", help="playoffit: stromon nimi uudelleen")
+    parser.add_argument("arvo", nargs="?", help="seula-arvo: uusi arvo")
     parser.add_argument("--kuiva", action="store_true")
     parser.add_argument("--json", action="store_true", help="tila: koneluettava (liiga.stromo.uk)")
     args = parser.parse_args()
     if not Path("research/replay.py").exists():
         sys.exit("Aja STROMO4-tutkimuskansiossa (~/stromo4-tutkimus).")
-    machine = args.json or args.komento in ("kaynnista", "pysayta", "tila2", "hae", "siirra", "palauta", "ylos",
-                                            "alas", "teho", "playoffit") or args.komento.startswith("jono-")
+    machine = (args.json or args.komento in ("kaynnista", "pysayta", "tila2", "hae", "siirra", "palauta", "ylos",
+                                             "alas", "teho", "playoffit", "seula", "seula-arvo")
+               or args.komento.startswith("jono-"))
     if machine:
         try:
             if args.komento == "kaynnista":
@@ -1344,6 +1542,10 @@ def main():
                 out = fetch_updates()
             elif args.komento in ("siirra", "palauta", "ylos", "alas", "playoffit"):
                 out = stromo_command(args.komento, args.kohde, args.vahvista)
+            elif args.komento == "seula":
+                out = seula_command(args.kohde)
+            elif args.komento == "seula-arvo":
+                out = seula_command("oma", args.kohde, args.arvo)
             elif args.komento == "teho":
                 if args.kohde not in TEHO:
                     raise ValueError("Teho on kevyt tai taysi")

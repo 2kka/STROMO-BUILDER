@@ -4,6 +4,7 @@
 #   command="/home/stromoadmin/stromo-builder/liiga/liiga-ohjaus",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA… stromo4-liiga
 # Sallitut: tila --json | tila2 | hae | raportti | kaynnista | pysayta | teho kevyt|taysi
 #           siirra|palauta|ylos|alas <stromo> | playoffit <stromo> --vahvista <stromo>
+#           seula iso_kampa|normaali|tiukka|oma | seula-arvo <säädin> <arvo>
 #           jono-ensin|jono-ohita|jono-palauta <variantti>  (LIIGA 1, poistuu kun sivu on päivitetty)
 set -euo pipefail
 [[ -f $HOME/.local/bin/env ]] && source "$HOME/.local/bin/env"
@@ -16,6 +17,10 @@ case "${#words[@]}:${words[0]:-}" in
   "2:teho") [[ ${words[1]} == kevyt || ${words[1]} == taysi ]] || fail "teho on kevyt tai taysi" ;;
   "2:siirra"|"2:palauta"|"2:ylos"|"2:alas")
     [[ ${words[1]} =~ ^[a-z]+/[A-Za-z0-9_]{1,120}$ ]] || fail "virheellinen stromo" ;;
+  "2:seula") [[ ${words[1]} =~ ^(iso_kampa|normaali|tiukka|oma)$ ]] || fail "tuntematon seula" ;;
+  "3:seula-arvo")
+    [[ ${words[1]} =~ ^(karsinta|tryout_max|tl_k|tl_min_rypaat|tl_max_vrk|naapuri|kausi_alfa|kausi_min_plus)$ \
+       && ${words[2]} =~ ^[a-z0-9.]{1,12}$ ]] || fail "virheellinen säädin" ;;
   "4:playoffit")
     [[ ${words[1]} =~ ^[a-z]+/[A-Za-z0-9_]{1,120}$ && ${words[2]} == --vahvista && ${words[3]} == "${words[1]}" ]] \
       || fail "playoffit vaatii vahvistuksen: playoffit <stromo> --vahvista <stromo>" ;;
