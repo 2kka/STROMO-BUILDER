@@ -306,7 +306,12 @@ def kv_refresh():
 
 def kv_of(ajo):
     """keskivirhe.json-tiivistelmä tilastorivin ajosta (None, jos ei laskettu)."""
-    data = read_json(RUNS / ajo / KV, None) if ajo else None
+    path = RUNS / ajo / KV if ajo else None
+    if path is not None and not path.exists():
+        # Vanha tilastorivi (ennen #27) tallensi vain variantin nimen: haetaan erän alikansiosta.
+        found = sorted(RUNS.glob(f"*/{Path(ajo).name}/{KV}"))
+        path = found[-1] if found else path
+    data = read_json(path, None) if path is not None else None
     if not data:
         return None
     out = {}
