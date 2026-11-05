@@ -53,6 +53,12 @@ ajon aikainen seula tallentuvat aina; tulosten jälkeen muutettu seula merkitsee
 (max_jatkoon) poistui, koska omistaja siirtää vaiheet käsin. Playoffit eivät ole säädettävissä. Puuttuva palikka palauttaa stromon prospekteihin
 ("odottaa palikkaa"), eikä se kuole. Yöajo ajaa vain ajojonossa olevat.
 
+**Keskivirhe (auditointi 5.11., STROMO4 #66):** jonon tyhjennyttyä (ja `liiga.py keskivirhe`)
+jokaiselle valmiille ajolle lasketaan `keskivirhe.json`: paritettu viikkoklusteroitu SE,
+`z_klusteri`, viikkolohkobootstrapin 95 % väli ja p (satunnaiset ja täsmätyt verrokit).
+Luvut näkyvät tuloksissa (`tulokset[].keskivirhe`) vanhan 50/√rypäät-z:n rinnalla.
+**Läpäisy käyttää toistaiseksi vanhaa sääntöä**; vaihto päätetään vaiheen 0 koosteen jälkeen.
+
 **Yöajo:** `liiga/yoajo.sh` (Windowsin tehtävänajastin käynnistää, ks. alla). Se ohittaa
 yön, jos jokin ajo on jo käynnissä, ja kirjoittaa lokiin `data/research/liiga/yoajo.log`.
 

@@ -274,6 +274,54 @@ def tl_run_dir(runs, v, tr):
     return path if path is not None else direct
 
 
+KV = "keskivirhe.json"
+
+
+def kv_stale(path):
+    """Puuttuuko keskivirhe.json tai onko se vanhempi kuin tulokset tai tappotestit?"""
+    kv = path / KV
+    if not (path / "followups.jsonl").exists():
+        return False
+    if not kv.exists():
+        return True
+    newest = max((path / n).stat().st_mtime for n in ("followups.jsonl", "tappotestit.json") if (path / n).exists())
+    return kv.stat().st_mtime < newest
+
+
+def kv_refresh():
+    """Paritettu klusteri-SE (STROMO4 research.keskivirhe, #66) valmiille ajoille, joilta se puuttuu.
+    Vain lukee ajon tiedostot ja kirjoittaa keskivirhe.json/.md; läpäisysääntöihin ei vaikuta."""
+    if not Path("research/keskivirhe.py").exists():
+        return 0
+    done = 0
+    for config_path in [*RUNS.glob("*/config.json"), *RUNS.glob("*/*/config.json")]:
+        path = config_path.parent
+        config = read_json(config_path, {})
+        if config.get("status") != "complete" or config.get("kind") == "batch" or not kv_stale(path):
+            continue
+        proc = subprocess.run(UV + ["research.keskivirhe", str(path)], capture_output=True, text=True)
+        done += proc.returncode == 0
+    return done
+
+
+def kv_of(ajo):
+    """keskivirhe.json-tiivistelmä tilastorivin ajosta (None, jos ei laskettu)."""
+    data = read_json(RUNS / ajo / KV, None) if ajo else None
+    if not data:
+        return None
+    out = {}
+    for kind, prefix in (("satunnainen", ""), ("taysmatyt", "tm_")):
+        r = data.get(kind) or {}
+        if r.get("reuna_pp") is None:
+            continue
+        out.update({
+            f"{prefix}se_klusteri": r.get("se_klusteri_pp"), f"{prefix}z_klusteri": r.get("z_klusteri"),
+            f"{prefix}bootstrap_p": r.get("bootstrap_p_yksisuuntainen"), f"{prefix}ci95": r.get("bootstrap_ci_pp"),
+            f"{prefix}klustereita": r.get("klustereita"), f"{prefix}varoitus": r.get("varoitus"),
+        })
+    return out or None
+
+
 def evaluate(vs, rows, runs):
     """Päivittää tilastot valmiiden ajojen perusteella ja palauttaa tilan per variantti."""
     t = SAANNOT["treenileiri"]
@@ -613,6 +661,8 @@ def results_table(vs, rows, sl):
             "se": se, "z": (e / se) if (e is not None and se) else None, "per_vrk": t.get("per_vrk"),
             "lapaisy": not tl_reasons(r, sl), "syyt": tl_reasons(r, sl),
             "jalkisaadetty": jalkisaadetty(r, sl), "ajon_seula": (r.get("seula") or {}).get("nimi", "normaali"),
+            # Paritettu viikkoklusteri-SE (#66): rinnalla, ei vielä läpäisysäännössä.
+            "keskivirhe": kv_of(r.get("ajo")),
         })
     return out
 
@@ -755,6 +805,8 @@ def run_queue(dry):
             sync_events(vs, rows, runs, state)
         todo = allowed_jobs(vs, rows, runs, state)
         if not todo:
+            if not dry and (n := kv_refresh()):
+                print(f"Keskivirhe laskettu {n} ajolle.")
             print("Jono tyhjä.")
             if ran and not dry:
                 queue_done_event(vs, rows, runs, started)
@@ -814,13 +866,15 @@ def fmt(x, d=1):
 
 
 def table(vs, rows, state):
-    lines = ["| Variantti | Vaihe | Tila | Treenileiri reuna / kynnys pp | Rypäät |", "|---|---|---|---:|---:|"]
+    lines = ["| Variantti | Vaihe | Tila | Treenileiri reuna / kynnys pp | Rypäät | z klusteri |",
+             "|---|---|---|---:|---:|---:|"]
     for v in vs:
         stage, status = state[v["id"]]
         tr = last(rows, "treenileiri", v)
         t = tr["tulos"] if tr else {}
         lines.append(
             f"| {v['id']} | {stage} | {status} | {fmt(t.get('reuna'), 2)} / {fmt(t.get('kynnys'), 2)} | {t.get('rypaat', '—')} |"
+            f" {fmt(((kv_of(tr.get('ajo')) if tr else None) or {}).get('z_klusteri'), 2)} |"
         )
     return "\n".join(lines)
 
@@ -1592,7 +1646,7 @@ def main():
     parser.add_argument("komento", choices=["tila", "aja", "raportti", "vie", "paketti", "yo", "kaynnista",
                                             "pysayta", "jono-ensin", "jono-ohita", "jono-palauta",
                                             "tila2", "hae", "siirra", "palauta", "ylos", "alas", "teho",
-                                            "playoffit", "seula", "seula-arvo"])
+                                            "playoffit", "seula", "seula-arvo", "keskivirhe"])
     parser.add_argument("kohde", nargs="?",
                         help="paketti: ajokansio/variantti/stromo; jono-*: variantti; siirra|palauta|ylos|alas|"
                              "playoffit: stromo (esim. gpt/utc_paivanvaihde); teho: kevyt|taysi")
@@ -1639,6 +1693,9 @@ def main():
         except Exception as error:  # noqa: BLE001 – koneluettava virhe palvelimelle
             print(json.dumps({"virhe": f"{type(error).__name__}: {error}"}, ensure_ascii=False))
             sys.exit(1)
+        return
+    if args.komento == "keskivirhe":
+        print(f"Keskivirhe laskettu {kv_refresh()} ajolle (research.keskivirhe).")
         return
     if args.komento in ("aja", "yo"):
         run_jobs(args.kuiva)
