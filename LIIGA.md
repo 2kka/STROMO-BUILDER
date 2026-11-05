@@ -46,8 +46,8 @@ omistaja painaa Aja (teho kevyt/täysi).
 **Seula (omistaja 4.11.2026):** läpäisy lasketaan raakaluvuista voimassa olevalla seulalla
 (`liiga.py seula iso_kampa|normaali|tiukka|oma`, `liiga.py seula-arvo <säädin> <arvo>`).
 Iso kampa (oletus): ei aikaista karsintaa, Treenileirin raja 1 keskivirhe, min 30 rypästä,
-naapurisääntö enemmistö. Normaali = aiempi LIIGA (2 keskivirhettä = 100/√rypäät, min 100,
-kaikki naapurit, välitarkistus karsii). Tiukka: 3 keskivirhettä, Kausi α 1 %. Raakaluvut ja
+naapurisääntö enemmistö. Normaali = 2 keskivirhettä, min 100, kaikki naapurit, välitarkistus
+karsii. Tiukka: 3 keskivirhettä, Kausi α 1 %. Raakaluvut ja
 ajon aikainen seula tallentuvat aina; tulosten jälkeen muutettu seula merkitsee tuloksen
 "jälkisäädetty". Sattumamittari: testattu N × sattumaläpäisy vs toteutunut. Kiintiö
 (max_jatkoon) poistui, koska omistaja siirtää vaiheet käsin. Playoffit eivät ole säädettävissä. Puuttuva palikka palauttaa stromon prospekteihin
@@ -57,7 +57,11 @@ ajon aikainen seula tallentuvat aina; tulosten jälkeen muutettu seula merkitsee
 jokaiselle valmiille ajolle lasketaan `keskivirhe.json`: paritettu viikkoklusteroitu SE,
 `z_klusteri`, viikkolohkobootstrapin 95 % väli ja p (satunnaiset ja täsmätyt verrokit).
 Luvut näkyvät tuloksissa (`tulokset[].keskivirhe`) vanhan 50/√rypäät-z:n rinnalla.
-**Läpäisy käyttää toistaiseksi vanhaa sääntöä**; vaihto päätetään vaiheen 0 koosteen jälkeen.
+**Keskivirhe 5.11. alkaen (omistaja lukitsi):** vaiheen 0 mukaan todellinen SE = 1,40 × 50/√rypäät
+(95 % 1,34–1,46; 32 ajoa). Seulat käyttävät ajon klusteri-SE:tä (≥ 20 viikkoa), muuten
+70/√rypäät; sama Kaudella. Seulan k on nyt oikeina keskivirheinä (Iso kampa 1 → sattumalta läpi
+~16/100, Normaali 2 → ~2/100, Tiukka 3 → ~0,1/100). Vanhat tulokset arvioidaan uudelleen
+merkinnällä "jälkisäädetty" (seulaprofiilin `se_malli` muuttui).
 
 **Yöajo:** `liiga/yoajo.sh` (Windowsin tehtävänajastin käynnistää, ks. alla). Se ohittaa
 yön, jos jokin ajo on jo käynnissä, ja kirjoittaa lokiin `data/research/liiga/yoajo.log`.

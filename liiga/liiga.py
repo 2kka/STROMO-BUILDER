@@ -542,7 +542,13 @@ SEULA_RAJAT = {
     "tl_min_rypaat": (int, 10, 300), "tl_max_vrk": (int, 1, 100), "naapuri": ("kaikki", "enemmistö", "pois"),
     "kausi_alfa": (float, 0.001, 0.2), "kausi_min_plus": (int, 1, 4),
 }
-VERTAILTAVAT = ("tl_k", "tl_min_rypaat", "tl_max_vrk", "naapuri", "karsinta", "tryout_max")
+VERTAILTAVAT = ("tl_k", "tl_min_rypaat", "tl_max_vrk", "naapuri", "karsinta", "tryout_max", "se_malli")
+# Keskivirhemalli (omistaja lukitsi 5.11. klo 16.01, vaihe 0 / STROMO4 #66): todellinen SE / (50/√rypäät)
+# = 1,40 (95 % 1,34–1,46; 32 ajoa). Ensisijaisesti ajon paritettu viikkoklusteri-SE (keskivirhe.json,
+# ≥ 20 klusteria), muuten 70/√rypäät. Seulojen k-arvot ovat nyt oikeita keskivirheitä.
+SE_MALLI = "klusteri-70"
+SE_KERROIN = 70
+MIN_KLUSTERIT = 20
 
 
 def seula():
@@ -551,7 +557,8 @@ def seula():
     base = dict(SEULAT.get(c.get("nimi"), SEULAT[SEULA_OLETUS]))
     if c.get("nimi") == "oma":
         base.update({k: c[k] for k in SEULA_RAJAT if k in c})
-    return {"nimi": c.get("nimi") if c.get("nimi") in (*SEULAT, "oma") else SEULA_OLETUS, **base}
+    return {"nimi": c.get("nimi") if c.get("nimi") in (*SEULAT, "oma") else SEULA_OLETUS, **base,
+            "se_malli": SE_MALLI}
 
 
 def tryout_pass(row, sl):
@@ -560,7 +567,15 @@ def tryout_pass(row, sl):
 
 
 def se_pp(n):
-    return 50 / math.sqrt(n) if n else None
+    return SE_KERROIN / math.sqrt(n) if n else None
+
+
+def row_se(row):
+    """Tilastorivin keskivirhe: ajon klusteri-SE (≥ 20 viikkoa), muuten 70/√rypäät."""
+    kv = kv_of(row.get("ajo")) or {}
+    if kv.get("se_klusteri") and (kv.get("klustereita") or 0) >= MIN_KLUSTERIT:
+        return kv["se_klusteri"]
+    return se_pp(row.get("tulos", {}).get("rypaat") or 0)
 
 
 def tl_reasons(row, sl):
@@ -569,7 +584,7 @@ def tl_reasons(row, sl):
     reasons = []
     if n < sl["tl_min_rypaat"]:
         reasons.append("rypäät")
-    if e is None or not n or e < sl["tl_k"] * se_pp(n):
+    if e is None or not n or e < sl["tl_k"] * row_se(row):
         reasons.append("reuna")
     if t.get("per_vrk", 0) > sl["tl_max_vrk"]:
         reasons.append("tiheys")
@@ -615,7 +630,8 @@ def kausi_pass(row, sl, entered):
     if e is None or not n:
         return False
     z = NormalDist().inv_cdf(1 - sl["kausi_alfa"] / max(1, entered))
-    return e >= 50 * z / math.sqrt(n) and t.get("kaudet_plussalla", 0) >= sl["kausi_min_plus"]
+    se = row_se(row) if row.get("tulos", {}).get("rypaat") else se_pp(n)
+    return e >= z * se and t.get("kaudet_plussalla", 0) >= sl["kausi_min_plus"]
 
 
 def jalkisaadetty(row, sl):
@@ -655,7 +671,7 @@ def results_table(vs, rows, sl):
             continue
         t = r["tulos"]
         n, e = t.get("rypaat") or 0, t.get("reuna")
-        se = se_pp(n)
+        se = row_se(r)
         out.append({
             "id": v["id"], "stromo": v["stromo"], "params": v["params"], "reuna": e, "rypaat": n,
             "se": se, "z": (e / se) if (e is not None and se) else None, "per_vrk": t.get("per_vrk"),
@@ -918,23 +934,23 @@ def report(vs, rows, state):
 
 
 def hof_entries(vs, rows):
-    """Treenileirillä mitatut, reuna/kynnys-suhteen mukaan paras ensin."""
+    """Treenileirillä mitatut, z:n (reuna / oikea keskivirhe) mukaan paras ensin."""
     best = []
     for v in vs:
         row = last(rows, "treenileiri", v)
-        if row and row["tulos"].get("reuna") is not None and row["tulos"].get("kynnys"):
+        if row and row["tulos"].get("reuna") is not None and (se := row_se(row)):
             t = row["tulos"]
-            best.append((t["reuna"] / t["kynnys"], v, t))
+            best.append((t["reuna"] / se, v, t))
     best.sort(key=lambda b: -b[0])
     return best
 
 
 def hall_of_fame(vs, rows, state, top=5):
-    """Pistepörssi: Treenileirin reuna suhteessa kynnykseen, paras ensin."""
+    """Pistepörssi: Treenileirin z (reuna / oikea keskivirhe), paras ensin."""
     best = hof_entries(vs, rows)
     medals = ["🥇", "🥈", "🥉"]
     lines = [
-        "| # | Tekijä | Stromo | Variantti | Reuna pp | Kynnys pp | Rypäät | Vaihe |",
+        "| # | Tekijä | Stromo | Variantti | Reuna pp | z | Rypäät | Vaihe |",
         "|---|---|---|---|---:|---:|---:|---|",
     ]
     for i, (ratio, v, t) in enumerate(best[:top]):
@@ -943,14 +959,15 @@ def hall_of_fame(vs, rows, state, top=5):
         stage, status = state[v["id"]]
         mark = medals[i] if i < 3 else str(i + 1)
         lines.append(
-            f"| {mark} | {author} | {name} | {params} | {fmt(t['reuna'], 2)} | {fmt(t['kynnys'], 2)} "
+            f"| {mark} | {author} | {name} | {params} | {fmt(t['reuna'], 2)} | {fmt(ratio, 2)} "
             f"| {t['rypaat']} | {stage}: {status} |"
         )
     if not best:
         lines.append("| – | – | – | – | – | – | – | Treenileiri kesken |")
     lines += [
         "",
-        f"Mitattu {len(best)} varianttia. Läpäisy vaatii reunan ≥ kynnyksen (suhde ≥ 1) "
+        f"Mitattu {len(best)} varianttia. z = reuna / oikea keskivirhe (klusteri-SE tai 70/√rypäät). "
+        "Läpäisy: z ≥ seulan k "
         "ja naapurivariantin plussalla. Päivittyy LIIGAn yöajosta.",
     ]
     return "\n".join(lines)
