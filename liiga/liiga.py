@@ -337,7 +337,10 @@ def evaluate(vs, rows, runs):
             )
     # 3.1d: kun yksikin saman stromon variantti on jo miinuksella tai karsittu, kukaan
     # sen naapureista ei voi enää läpäistä naapurisääntöä -> keskeneräisiä ei ajeta.
-    doomed = {v["stromo"] for v in vs if neighbor_sign(rows, v) is False} if seula()["karsinta"] else set()
+    _sl = seula()
+    # Auditointi A: ennenaikainen ohitus vain, kun aikainen karsinta on päällä ja naapurisääntö on "kaikki".
+    doomed = ({v["stromo"] for v in vs if neighbor_sign(rows, v) is False}
+              if _sl["karsinta"] and _sl["naapuri"] == "kaikki" else set())
     for v in vs:
         if (
             v["stromo"] in doomed
@@ -402,6 +405,7 @@ def evaluate(vs, rows, runs):
                     "z": z,
                     "kaudet_plussalla": plus,
                     "rypaat": pooled["rypaat"],
+                    "m": max(1, entered),  # auditointi B: testiperheen koko lukitaan arviointihetkellä
                 },
                 "seula": seula(),
             },
@@ -467,7 +471,7 @@ def stage_of(rows, v, vs=None):
     ka = last(rows, "kausi", v)
     if not ka:
         return "Kausi", "odottaa"
-    if not kausi_pass(ka, sl, sum(1 for r in rows if r["tapahtuma"] == "kausi")):
+    if not kausi_pass(ka, sl, ka["tulos"].get("m") or sum(1 for r in rows if r["tapahtuma"] == "kausi")):
         return "Kausi", "karsittu"
     po = last(rows, "playoffit", v)
     if not po:
@@ -482,9 +486,9 @@ def stage_of(rows, v, vs=None):
 SEULAT = {
     "iso_kampa": {"karsinta": False, "tryout_max": 200, "tl_k": 1.0, "tl_min_rypaat": 30, "tl_max_vrk": 20,
                   "naapuri": "enemmistö", "kausi_alfa": 0.05, "kausi_min_plus": 3},
-    "normaali": {"karsinta": True, "tryout_max": 200, "tl_k": 2.0, "tl_min_rypaat": 100, "tl_max_vrk": 20,
+    "normaali": {"karsinta": False, "tryout_max": 200, "tl_k": 2.0, "tl_min_rypaat": 100, "tl_max_vrk": 20,
                  "naapuri": "kaikki", "kausi_alfa": 0.05, "kausi_min_plus": 3},
-    "tiukka": {"karsinta": True, "tryout_max": 200, "tl_k": 3.0, "tl_min_rypaat": 100, "tl_max_vrk": 20,
+    "tiukka": {"karsinta": False, "tryout_max": 200, "tl_k": 3.0, "tl_min_rypaat": 100, "tl_max_vrk": 20,
                "naapuri": "kaikki", "kausi_alfa": 0.01, "kausi_min_plus": 3},
 }
 SEULA_OLETUS = "iso_kampa"
@@ -494,7 +498,8 @@ SEULA_RAJAT = {
     "tl_min_rypaat": (int, 10, 300), "tl_max_vrk": (int, 1, 100), "naapuri": ("kaikki", "enemmistö", "pois"),
     "kausi_alfa": (float, 0.001, 0.2), "kausi_min_plus": (int, 1, 4),
 }
-VERTAILTAVAT = ("tl_k", "tl_min_rypaat", "tl_max_vrk", "naapuri", "karsinta", "tryout_max")
+VERTAILTAVAT = ("tl_k", "tl_min_rypaat", "tl_max_vrk", "naapuri", "karsinta", "tryout_max", "kausi_alfa",
+                "kausi_min_plus")
 
 
 def seula():

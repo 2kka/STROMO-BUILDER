@@ -10,7 +10,6 @@
     "kynnys_kerroin": 100,
     "min_rypaat": 100,
     "max_vrk": 20,
-    "max_jatkoon": 5,
     "valitarkistus": {
       "loppu": "2026-01-31",
       "min_rypaat": 17,
