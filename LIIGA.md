@@ -78,3 +78,10 @@ kausi) ajetaan yhtenä `research.replay --batch` -eränä, kun ne kuuluvat samaa
 palikat lasketaan kerran. Tulokset tallentuvat `runs/liiga-era-…/<variantti>/` samassa muodossa
 kuin yksittäisajo (STROMO4:n testi: erä = yksittäisajot tavuina).
 
+**Auditointi 5.11.2026 (GPT 2 kierrosta + Claude, omistaja lukitsi):** periaate *laske kaikki kiinnostava,
+testaa virallisesti vain ennalta määrätty väite*. Askel 1 tehty: aikainen karsinta pois kaikista
+esiasetuksista; ennenaikainen naapuriohitus vain karsinnan ja "kaikki"-säännön kanssa; Kauden
+Bonferroni-testiperheen koko lukitaan riviin (`m`); "jälkisäädetty" kattaa Kauden säätimet;
+`max_jatkoon` poistettu. Seuraavaksi: todellinen keskivirhe ja paritettu klusteri-SE + bootstrap
+(STROMO4), aikajänteet ja vastekäyrä, täsmätty vertailu, ruudukkotesti, testibudjetti, varjoliiga.
+
